@@ -31,3 +31,11 @@ dist-ssr
 # Rust / Tauri
 src-tauri/target
 src-tauri/gen/schemas
+
+# AI tooling
+.claude/
+.cursor/
+.aider*
+.copilot/
+CLAUDE.md
+.windsurf/
