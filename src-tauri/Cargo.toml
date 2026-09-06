@@ -1,0 +1,82 @@
+[package]
+name = "dayz-config-manager"
+version = "0.1.2"
+description = "Domain-aware DayZ dedicated server config manager"
+authors = ["DayZ ServerUI contributors"]
+license = "MIT OR Apache-2.0"
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.5.6", features = [] }
+
+[dependencies]
+tauri = { version = "2.10.3", features = ["protocol-asset"] }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-opener = "2"
+
+[target.'cfg(windows)'.dependencies]
+# Read HKLM\SOFTWARE\Microsoft\Cryptography\MachineGuid to bind the
+# Stronghold vault password to this specific Windows machine.
+winreg = "0.52"
+
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+anyhow = "1.0"
+log = "0.4"
+uuid = { version = "1.11", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["full"] }
+
+# Profiles, sync, git, hashing, SFTP transport.
+# russh + russh-sftp is a pure-Rust SSH/SFTP stack (no libssh2/OpenSSL build
+# deps). base64 is used to render OpenSSH SHA256 fingerprints.
+git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
+sha2 = "0.10"
+hex = "0.4"
+walkdir = "2"
+russh = "0.50"
+russh-sftp = "2.1"
+async-trait = "0.1"
+base64 = "0.22"
+
+# Phase 2: XML (types.xml, cfgeconomycore.xml, spawnables/events/...)
+quick-xml = { version = "0.36", features = ["serialize"] }
+
+# Phase 8c follow-up: map backdrop download from iZurvive (tile
+# pyramid → stitched JPG). reqwest with rustls-tls to avoid OpenSSL
+# on Windows. image with just jpeg + png codecs to keep binary size
+# down; futures for bounded concurrent downloads.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "stream", "json"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+futures = "0.3"
+tempfile = "3"
+
+# Encrypted credential storage: SFTP secrets are kept in a Stronghold
+# snapshot instead of plaintext JSON. The snapshot password is derived
+# from a machine-specific seed (Windows Machine GUID) so the vault is
+# bound to this machine/user. tauri-plugin-stronghold is JS-only; we
+# use iota_stronghold directly and manage the vault as Tauri state
+# (see src/vault.rs).
+iota_stronghold = "2"
+zeroize = "1"
+
+[dev-dependencies]
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true

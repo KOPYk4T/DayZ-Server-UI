@@ -1,0 +1,312 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* =====================================================================
+ * Brandbook v1.0 — DayZ ServerUI
+ *
+ * Palette, typography, and border system pulled from branding/brandbook.html.
+ * Military / tactical feel: dark field base, rust orange accent, olive
+ * secondary, cream reading copy. Three fonts:
+ *
+ *   Oswald          — display (page titles, section headings, uppercase)
+ *   IBM Plex Sans   — body copy (sidebar, buttons, forms)
+ *   JetBrains Mono  — monospace (paths, codes, IDs, stats)
+ *
+ * The app is dark-first; the light variant (`:root`) exists so the
+ * theme switcher in Settings still flips without visual breakage, but
+ * every screenshot / launch should read the dark branded version.
+ * =================================================================== */
+
+@import url("https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap");
+
+:root {
+  /* Brand palette (raw values — keep these accessible so components can
+     pull rust / olive directly when they need the accent voice). */
+  --brand-black: #0d0f0c;
+  --brand-dark: #141813;
+  --brand-dark-2: #1a1e1a;
+  --brand-dark-3: #22261e;
+  --brand-olive-dark: #3d4a2e;
+  --brand-olive: #4a5238;
+  --brand-olive-mid: #6b7a4f;
+  --brand-olive-light: #8ba376;
+  --brand-rust: #d47028;
+  --brand-rust-dark: #b04d1a;
+  --brand-rust-deep: #8a3a12;
+  --brand-cream: #e8e4d9;
+  --brand-cream-light: #f0ebe0;
+  --brand-cream-dim: #a8a496;
+  --brand-danger: #8b2a1e;
+  --brand-danger-bright: #c24a33;
+
+  --radius: 0.25rem; /* Sharper corners match the tactical feel — the
+                         brandbook shows 2px on pills and no rounding on
+                         swatches. */
+
+  /* Light-mode variant (not the primary look — cream canvas / dark text
+     so the theme switcher doesn't look broken). Rust stays the accent. */
+  --background: var(--brand-cream);
+  --foreground: var(--brand-dark);
+  --card: var(--brand-cream-light);
+  --card-foreground: var(--brand-dark);
+  --popover: var(--brand-cream-light);
+  --popover-foreground: var(--brand-dark);
+  --primary: var(--brand-rust);
+  --primary-foreground: var(--brand-cream-light);
+  --secondary: #d8d4c7;
+  --secondary-foreground: var(--brand-dark);
+  --muted: #dcd8cb;
+  --muted-foreground: #6b6659;
+  --accent: #e0dccd;
+  --accent-foreground: var(--brand-dark);
+  --destructive: var(--brand-danger);
+  --destructive-foreground: var(--brand-cream-light);
+  --border: rgba(13, 15, 12, 0.12);
+  --input: rgba(13, 15, 12, 0.18);
+  --ring: var(--brand-rust);
+
+  --sidebar: var(--brand-cream-light);
+  --sidebar-foreground: var(--brand-dark);
+  --sidebar-primary: var(--brand-rust);
+  --sidebar-primary-foreground: var(--brand-cream-light);
+  --sidebar-accent: rgba(13, 15, 12, 0.06);
+  --sidebar-accent-foreground: var(--brand-dark);
+  --sidebar-border: rgba(13, 15, 12, 0.1);
+  --sidebar-ring: var(--brand-rust);
+
+  --severity-error: var(--brand-danger);
+  --severity-warning: var(--brand-rust);
+  --severity-info: var(--brand-olive-mid);
+  --severity-success: var(--brand-olive-light);
+
+  /* Typography stacks. Tailwind reads `--font-sans` / `--font-mono` for
+     the default `font-sans` / `font-mono` classes; `--font-display` is
+     surfaced via the custom `.font-display` utility below. */
+  --font-sans:
+    "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-display:
+    "Oswald", "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:
+    "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.dark {
+  /* Primary brand theme — military-tactical dark. Elevation ladder
+     runs sidebar (deepest) → background → card → popover so layered
+     UI actually separates visually:
+
+       sidebar (#0d0f0c)   ← always-present left rail, pulls back
+       background (#141813) ← main canvas
+       card (#1f2420)      ← panels, page-level headers
+       popover (#2a2f26)   ← overlays: dropdowns, dialogs, drawers
+
+     The raw brand palette stays available as `bg-brand-dark-2`,
+     `bg-brand-dark-3` etc. for callers that want the brandbook's
+     canonical swatches; semantic tokens (card/popover) below are
+     tuned for actual-in-use contrast.
+  */
+  --background: var(--brand-dark);
+  --foreground: var(--brand-cream);
+  --card: #1f2420;
+  --card-foreground: var(--brand-cream);
+  --popover: #2a2f26;
+  --popover-foreground: var(--brand-cream);
+  --primary: var(--brand-rust);
+  --primary-foreground: var(--brand-black);
+  --secondary: #262b21;
+  --secondary-foreground: var(--brand-cream);
+  --muted: #1a1e1a;
+  --muted-foreground: var(--brand-cream-dim);
+  --accent: var(--brand-olive-dark);
+  --accent-foreground: var(--brand-cream);
+  --destructive: var(--brand-danger);
+  --destructive-foreground: var(--brand-cream-light);
+  /* Borders — visible enough to read as a panel boundary without
+     shouting. Bumped from the brandbook's faint 10% to 16% so sticky
+     header dividers actually show up. */
+  --border: rgba(232, 228, 217, 0.16);
+  --input: rgba(232, 228, 217, 0.22);
+  --ring: var(--brand-rust);
+
+  --sidebar: var(--brand-black);
+  --sidebar-foreground: var(--brand-cream);
+  --sidebar-primary: var(--brand-rust);
+  --sidebar-primary-foreground: var(--brand-black);
+  --sidebar-accent: rgba(255, 255, 255, 0.05);
+  --sidebar-accent-foreground: var(--brand-cream);
+  --sidebar-border: rgba(232, 228, 217, 0.12);
+  --sidebar-ring: var(--brand-rust);
+
+  --severity-error: var(--brand-danger-bright);
+  --severity-warning: var(--brand-rust);
+  --severity-info: var(--brand-olive-light);
+  --severity-success: var(--brand-olive-light);
+
+  /* Dark-theme drop shadow used by sticky / elevated surfaces. The
+     default Tailwind `shadow-*` utilities use translucent black which
+     barely registers on this palette. */
+  --shadow-elevated: 0 4px 14px 0 rgba(0, 0, 0, 0.45);
+  --shadow-sticky: 0 2px 10px 0 rgba(0, 0, 0, 0.35);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-severity-error: var(--severity-error);
+  --color-severity-warning: var(--severity-warning);
+  --color-severity-info: var(--severity-info);
+  --color-severity-success: var(--severity-success);
+
+  /* Expose the raw brand palette under a `brand-*` colour namespace so
+     components can reach `bg-brand-rust`, `text-brand-olive-light`, etc.
+     without threading them through the semantic aliases. */
+  --color-brand-black: var(--brand-black);
+  --color-brand-dark: var(--brand-dark);
+  --color-brand-dark-2: var(--brand-dark-2);
+  --color-brand-dark-3: var(--brand-dark-3);
+  --color-brand-olive-dark: var(--brand-olive-dark);
+  --color-brand-olive: var(--brand-olive);
+  --color-brand-olive-mid: var(--brand-olive-mid);
+  --color-brand-olive-light: var(--brand-olive-light);
+  --color-brand-rust: var(--brand-rust);
+  --color-brand-rust-dark: var(--brand-rust-dark);
+  --color-brand-rust-deep: var(--brand-rust-deep);
+  --color-brand-cream: var(--brand-cream);
+  --color-brand-cream-light: var(--brand-cream-light);
+  --color-brand-cream-dim: var(--brand-cream-dim);
+  --color-brand-danger: var(--brand-danger);
+  --color-brand-danger-bright: var(--brand-danger-bright);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv02"; /* IBM Plex Sans ligatures off
+                                              by default — small tweaks
+                                              for sharper numerals. */
+  }
+  button,
+  [role="button"] {
+    cursor: default;
+  }
+  /* Subtle tactical texture behind the app surface — two radial
+     gradients (rust + olive) matching the brandbook's hero body. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background-image:
+      radial-gradient(
+        circle at 15% 10%,
+        rgba(212, 112, 40, 0.04) 0%,
+        transparent 40%
+      ),
+      radial-gradient(
+        circle at 85% 80%,
+        rgba(139, 163, 118, 0.03) 0%,
+        transparent 45%
+      );
+    pointer-events: none;
+    z-index: 0;
+  }
+  #root {
+    position: relative;
+    z-index: 1;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(232, 228, 217, 0.14);
+    border-radius: 5px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(232, 228, 217, 0.28);
+  }
+}
+
+@layer utilities {
+  /* `font-display` — Oswald uppercase, used by PageHeader titles and
+     any other "tactical" headline. Pair with `tracking-wide` for small
+     labels and `tracking-tight` for large display type. */
+  .font-display {
+    font-family: var(--font-display);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  /* `font-mono` works out of the box via the Tailwind font-mono class
+     now that --font-mono is declared — no extra utility needed. */
+
+  /* Dashed divider matching the brandbook's section breaks. Drop this
+     on a `<hr>` or an empty `<div className="h-px border-t-dashed">`. */
+  .border-t-dashed {
+    border-top: 1px dashed var(--border);
+  }
+  .border-b-dashed {
+    border-bottom: 1px dashed var(--border);
+  }
+
+  /* Drop-shadow utilities tuned for the dark palette. Tailwind's
+     default `shadow-*` uses translucent black which barely registers
+     against our dark canvas. These darken enough to actually read as
+     a lifted surface. */
+  .shadow-sticky {
+    box-shadow: var(--shadow-sticky);
+  }
+  .shadow-elevated {
+    box-shadow: var(--shadow-elevated);
+  }
+}

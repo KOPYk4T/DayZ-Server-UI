@@ -1,0 +1,41 @@
+/* Leaflet theming overrides for the DayZ map. The stock Leaflet CSS
+   is white/blue; we flatten it to match the app's palette. */
+
+.leaflet-container {
+  background: transparent;
+  font-family: inherit;
+  outline: none;
+}
+
+.leaflet-control-zoom a {
+  background: var(--card);
+  color: var(--foreground);
+  border-color: var(--border);
+}
+
+.leaflet-control-zoom a:hover {
+  background: var(--accent);
+}
+
+.leaflet-control-attribution {
+  display: none !important;
+}
+
+.dayz-grid-label {
+  font-size: 9px;
+  color: var(--muted-foreground);
+  font-family: ui-monospace, monospace;
+  text-shadow:
+    0 0 2px var(--background),
+    0 0 2px var(--background);
+  pointer-events: none;
+  white-space: nowrap;
+  transform: translate(2px, -10px);
+}
+
+.dayz-marker {
+  border-radius: 9999px;
+  border: 1.5px solid rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+  box-sizing: border-box;
+}
