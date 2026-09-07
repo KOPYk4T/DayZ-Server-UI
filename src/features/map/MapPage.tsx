@@ -1052,7 +1052,7 @@ export function MapPage() {
               <Badge
                 variant="outline"
                 className="border-accent/40 text-accent"
-                title="Changes to db/env/*.xml or cfgenvironment.xml"
+                title="Changes to env/*.xml or cfgenvironment.xml"
               >
                 unsaved territories
               </Badge>
@@ -2752,7 +2752,7 @@ function TerritoriesPanel({
           <p className="text-[11px] text-muted-foreground">Loading…</p>
         ) : !entries || entries.length === 0 ? (
           <p className="text-[11px] text-muted-foreground">
-            No <code>db/env/</code> folder in this mission — DayZ ships
+            No <code>env/</code> folder in this mission — DayZ ships
             animal &amp; infected territories here.
           </p>
         ) : (

@@ -484,7 +484,7 @@ export function ceZonesWriteOverride(
   });
 }
 
-// ---------- Territories (db/env/*.xml + cfgenvironment.xml) ----------
+// ---------- Territories (env/*.xml + cfgenvironment.xml) ----------
 
 export function territoriesList(id: string): Promise<TerritoriesSnapshot> {
   return invoke("territories_list", { id });

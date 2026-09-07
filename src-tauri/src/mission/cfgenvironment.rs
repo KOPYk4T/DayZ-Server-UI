@@ -1,6 +1,6 @@
 //! Mission-side loader for `<mission>/cfgenvironment.xml`.
 //!
-//! This file ties the raw territory geometry under `db/env/*.xml` to
+//! This file ties the raw territory geometry under `env/*.xml` to
 //! actual game behaviour (which entities spawn, count limits, etc).
 //! If it doesn't exist the territory zones never activate, even
 //! though the geometry files parse fine.

@@ -62,7 +62,7 @@ export interface AnimalBindingDialogProps {
   onOpenChange: (next: boolean) => void;
   /** `null` → create mode. Otherwise edit the existing binding. */
   existing?: { binding: TerritoryBinding; filename: string } | null;
-  /** Filenames already present in `db/env/` — we reject dup create
+  /** Filenames already present in `env/` — we reject dup create
    *  attempts and warn on suspicious matches. */
   existingFilenames: string[];
   /** Bindings already in cfgenvironment — used as presets for the
@@ -354,7 +354,7 @@ export function AnimalBindingDialog({
                 <p className="text-[11px] text-muted-foreground">
                   Saves to{" "}
                   <code>
-                    db/env/{targetFilename || "<slug>_territories.xml"}
+                    env/{targetFilename || "<slug>_territories.xml"}
                   </code>
                 </p>
                 {filenameConflict ? (

@@ -522,7 +522,7 @@ export interface PlayerSpawnsSnapshot {
   missingFile: boolean;
 }
 
-// ---------- Territories (<mission>/db/env/*.xml) ----------
+// ---------- Territories (<mission>/env/*.xml) ----------
 
 export interface TerritoryZone {
   name: string;
@@ -559,7 +559,7 @@ export interface TerritoryFileEntry {
 
 // cfgenvironment.xml — behaviour registry that ties territory files
 // to the entities that spawn in them. Without this file the zones
-// under db/env/ exist but never produce an animal or zombie.
+// under env/ exist but never produce an animal or zombie.
 
 /** Free-form `<item name="…" val="…"/>` pair used at every level of
  *  cfgenvironment: on the territory itself (global count caps,

@@ -392,7 +392,7 @@ const TUTORIALS: Tutorial[] = [
             systems. <em>Dynamic events</em> (events.xml +
             cfgeventspawns.xml) spawn entities at positions but don't
             attach AI. <em>Territories</em> (cfgenvironment.xml +
-            db/env/*_territories.xml) wire entities to a{" "}
+            env/*_territories.xml) wire entities to a{" "}
             <code>GroupBehavior</code> script class that drives
             scripted AI (patrol, aggro, flocking). Vanilla bears /
             wolves / infected come pre-registered in cfgenvironment,
@@ -421,7 +421,7 @@ const TUTORIALS: Tutorial[] = [
               <li>
                 <strong>Slug</strong>: <code>super_bear</code> (becomes
                 the filename{" "}
-                <code>db/env/super_bear_territories.xml</code>)
+                <code>env/super_bear_territories.xml</code>)
               </li>
               <li>
                 <strong>Display name</strong>: <code>Super Bear</code>
@@ -474,7 +474,7 @@ const TUTORIALS: Tutorial[] = [
         text: (
           <>
             Press <strong>Create animal</strong>. Writes{" "}
-            <code>db/env/super_bear_territories.xml</code> (empty
+            <code>env/super_bear_territories.xml</code> (empty
             zones, you draw them next) and appends the binding to{" "}
             <code>cfgenvironment.xml</code> in one git commit.
           </>

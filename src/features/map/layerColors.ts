@@ -27,7 +27,7 @@ export const SAFEZONE_COLOR_SELECTED = "#16a34a"; // green-600
 export const QUEST_NPC_COLOR = "#a855f7"; // purple-500
 export const QUEST_NPC_COLOR_SELECTED = "#9333ea"; // purple-600
 
-/** Territory categories from `<mission>/db/env/*.xml`. Hand-picked
+/** Territory categories from `<mission>/env/*.xml`. Hand-picked
  *  palette keyed by the filename stem so colours stay stable across
  *  sessions and never collide with the layers above. Unknown
  *  categories (e.g. a mod adds `unicorn_territories.xml`) fall

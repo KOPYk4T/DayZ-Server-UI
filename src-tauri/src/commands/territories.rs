@@ -1,4 +1,4 @@
-//! Territory editor commands — both geometry (`db/env/*.xml`) and
+//! Territory editor commands — both geometry (`env/*.xml`) and
 //! behaviour (`cfgenvironment.xml`). The pair only makes sense
 //! together, so every read returns a joined snapshot and every
 //! write re-reads both sides before returning.

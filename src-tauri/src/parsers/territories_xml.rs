@@ -1,5 +1,5 @@
 //! Animal & infected territory definition files. Each file under
-//! `<mission>/db/env/` defines one category of entity (bear, wolf,
+//! `<mission>/env/` defines one category of entity (bear, wolf,
 //! cattle, zombie, …). Schema observed across all ~13 vanilla
 //! files:
 //!

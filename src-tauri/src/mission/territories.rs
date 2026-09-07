@@ -1,11 +1,12 @@
-//! Territory files under `<mission>/db/env/*.xml`.
+//! Territory files under `<mission>/env/*.xml`.
 //!
-//! DayZ ships one file per animal / infected category (`bear_
-//! territories.xml`, `wolf_territories.xml`, `zombie_territories.xml`,
-//! etc.). We don't hard-code the list — instead we enumerate every
-//! `*_territories.xml` inside the directory so mods that add new
-//! categories (say `chernarus_unicorn_territories.xml`) show up
-//! automatically in the UI.
+//! Official missions (and Bohemia's DayZ-Central-Economy repo) ship
+//! one file per animal / infected category at the mission root
+//! (`env/bear_territories.xml`, `env/zombie_territories.xml`, …).
+//! `cfgenvironment.xml`'s `<file path="env/…"/>` attributes are
+//! resolved from the mission root — **not** from `db/`. We don't
+//! hard-code the list; every `*_territories.xml` in that folder
+//! shows up so mods that add new categories appear automatically.
 //!
 //! Territories are opt-in on the mission side — the folder may not
 //! exist on older templates. When it's missing we return an empty
@@ -21,18 +22,25 @@ use crate::parsers::territories_xml::{self, TerritoryFile};
 
 use super::MissionContext;
 
-/// Absolute path to `<mission>/db/env/`. DayZ ships territory
-/// geometry files here, and `cfgenvironment.xml`'s `<file
-/// path="env/…"/>` attributes are resolved relative to the parent
-/// `db/` directory — so writing them at `<mission>/env/` (mission
-/// root) would silently break the binding lookup. Every
-/// read/write in this module goes through this single helper so
-/// the convention can't drift.
+/// Absolute path to the territory geometry folder.
+///
+/// Vanilla + Bohemia GitHub use `<mission>/env/`. A previous build
+/// of this app wrongly wrote to `<mission>/db/env/`; if that's the
+/// only folder present we still read it so those files aren't lost.
+/// New writes always prefer the official `env/` path (and create it).
 pub fn env_dir(ctx: &MissionContext) -> PathBuf {
-    ctx.mission_root.join("db").join("env")
+    let canonical = ctx.mission_root.join("env");
+    if canonical.is_dir() {
+        return canonical;
+    }
+    let legacy = ctx.mission_root.join("db").join("env");
+    if legacy.is_dir() {
+        return legacy;
+    }
+    canonical
 }
 
-/// One entry per file found inside `<mission>/db/env/`.
+/// One entry per file found inside the territory folder.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerritoryFileEntry {
@@ -178,11 +186,9 @@ mod tests {
     }
 
     #[test]
-    fn save_writes_under_db_env_not_mission_root() {
-        // Regression guard: the canonical territory location is
-        // <mission>/db/env/, NOT <mission>/env/. If someone re-routes
-        // env_dir this test catches it before it ships a broken
-        // cfgenvironment round-trip.
+    fn save_writes_under_mission_env_not_db_env() {
+        // Official layout: <mission>/env/. cfgenvironment's
+        // path="env/…" is resolved from the mission root.
         let td = TempDir::new().unwrap();
         let ws = td.path();
         let ctx = mk_ctx(ws, "mpmissions/dayzOffline.chernarusplus");
@@ -190,34 +196,28 @@ mod tests {
         let empty = TerritoryFile::default();
         let written = save(&ctx, "super_bear_territories.xml", &empty).unwrap();
 
-        let expected_db_env = ws
-            .join("mpmissions/dayzOffline.chernarusplus/db/env/super_bear_territories.xml");
-        let forbidden_root_env = ws
+        let expected = ws
             .join("mpmissions/dayzOffline.chernarusplus/env/super_bear_territories.xml");
+        let forbidden = ws
+            .join("mpmissions/dayzOffline.chernarusplus/db/env/super_bear_territories.xml");
 
-        assert_eq!(
-            written, expected_db_env,
-            "save() must return the db/env/ path"
-        );
-        assert!(expected_db_env.is_file(), "file must land in db/env/");
+        assert_eq!(written, expected, "save() must return the env/ path");
+        assert!(expected.is_file(), "file must land in env/");
         assert!(
-            !forbidden_root_env.exists(),
-            "file must NOT land at mission-root env/"
+            !forbidden.exists(),
+            "file must NOT land at db/env/"
         );
     }
 
     #[test]
-    fn list_reads_from_db_env_only() {
+    fn list_reads_from_mission_env_not_db_env() {
         let td = TempDir::new().unwrap();
         let ws = td.path();
         let mission_rel = "mpmissions/dayzOffline.chernarusplus";
         let ctx = mk_ctx(ws, mission_rel);
 
-        // Plant a file at the WRONG location (mission root env/) AND
-        // at the RIGHT location (db/env/). `list` should only surface
-        // the db/env/ one.
-        let wrong = ws.join(mission_rel).join("env");
-        let right = ws.join(mission_rel).join("db").join("env");
+        let right = ws.join(mission_rel).join("env");
+        let wrong = ws.join(mission_rel).join("db").join("env");
         std::fs::create_dir_all(&wrong).unwrap();
         std::fs::create_dir_all(&right).unwrap();
         std::fs::write(
@@ -235,5 +235,26 @@ mod tests {
         let names: Vec<_> =
             entries.iter().map(|e| e.filename.as_str()).collect();
         assert_eq!(names, vec!["bear_territories.xml"]);
+    }
+
+    #[test]
+    fn list_falls_back_to_legacy_db_env() {
+        let td = TempDir::new().unwrap();
+        let ws = td.path();
+        let mission_rel = "mpmissions/dayzOffline.enoch";
+        let ctx = mk_ctx(ws, mission_rel);
+
+        let legacy = ws.join(mission_rel).join("db").join("env");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(
+            legacy.join("wolf_territories.xml"),
+            r#"<territory-type/>"#,
+        )
+        .unwrap();
+
+        let entries = list(&ctx).unwrap();
+        let names: Vec<_> =
+            entries.iter().map(|e| e.filename.as_str()).collect();
+        assert_eq!(names, vec!["wolf_territories.xml"]);
     }
 }

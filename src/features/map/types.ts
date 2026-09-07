@@ -79,7 +79,7 @@ export const DEFAULT_LAYERS: LayersState = {
     usageFilter: null,
   },
   territories: {
-    // Off by default — only servers that use db/env/ care, and even
+    // Off by default — only servers that use env/ care, and even
     // then the zones are large enough to dominate the canvas.
     enabled: false,
     hiddenCategories: {},

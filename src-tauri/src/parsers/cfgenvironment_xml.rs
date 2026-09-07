@@ -28,7 +28,7 @@
 //!
 //! Two relationship rules the game enforces:
 //! - Every `<file path>` declaration must match an actual file under
-//!   `db/env/` or DayZ crashes on boot.
+//!   `env/` or DayZ crashes on boot.
 //! - Every `<territory>` binding's `<file usable>` must match one of
 //!   the declared `<file path>` stems or the zones never spawn.
 //!
