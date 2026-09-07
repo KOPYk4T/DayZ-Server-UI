@@ -39,13 +39,20 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { InfoTooltip } from "@/components/InfoTooltip";
+import { SpawnPlacementMap } from "@/features/map/SpawnPlacementMap";
 import { VanillaOverriddenBanner } from "@/features/mods/VanillaOverriddenBanner";
 import {
   usePlayerSpawnsSnapshot,
   usePlayerSpawnsUpdate,
 } from "@/hooks/usePlayerSpawns";
 import { cn, errorMessage } from "@/lib/utils";
+import { useProfileStore } from "@/stores/profileStore";
 import type { PlayerSpawnPoints, SpawnPosition } from "@/types/ipc";
+
+import {
+  needsUnsupportedGeneratorConfirm,
+  UnsupportedGeneratorsSaveDialog,
+} from "./UnsupportedGeneratorsSaveDialog";
 
 type SpawnKind = "fresh" | "hop" | "travel";
 
@@ -78,10 +85,13 @@ export function PlayerSpawnsPage() {
   const update = usePlayerSpawnsUpdate();
   const navigate = useNavigate();
   const location = useLocation();
+  const mapId = useProfileStore((s) => s.active?.map ?? "chernarusplus");
 
   const [tab, setTab] = useState<SpawnKind>("fresh");
   const [draft, setDraft] = useState<PlayerSpawnPoints | null>(null);
   const [confirmSave, setConfirmSave] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [addMode, setAddMode] = useState(false);
 
   useEffect(() => {
     if (snapshot.data) setDraft(snapshot.data.data);
@@ -94,6 +104,14 @@ export function PlayerSpawnsPage() {
     const k = params.get("kind");
     if (k === "fresh" || k === "hop" || k === "travel") setTab(k);
   }, [location.search]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAddMode(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const dirty = useMemo(() => {
     if (!draft || !snapshot.data) return false;
@@ -134,7 +152,7 @@ export function PlayerSpawnsPage() {
 
   const save = (force = false) => {
     if (!draft) return;
-    if (draft.hasUnsupportedGenerators && !force) {
+    if (needsUnsupportedGeneratorConfirm(draft) && !force) {
       setConfirmSave(true);
       return;
     }
@@ -202,9 +220,9 @@ export function PlayerSpawnsPage() {
               onClick={() =>
                 navigate(`/app/map?layer=player-spawns&kind=${tab}`)
               }
-              title={`Open the map filtered to the ${tab} spawn layer`}
+              title={`Open the world map with ${tab} spawns next to events and territories`}
             >
-              <MapIcon className="mr-1.5 h-3.5 w-3.5" /> Show on map
+              <MapIcon className="mr-1.5 h-3.5 w-3.5" /> Show in world map
             </Button>
             <Button
               variant="ghost"
@@ -260,7 +278,11 @@ export function PlayerSpawnsPage() {
 
       <Tabs
         value={tab}
-        onValueChange={(v) => setTab(v as SpawnKind)}
+        onValueChange={(v) => {
+          setTab(v as SpawnKind);
+          setSelectedIndex(null);
+          setAddMode(false);
+        }}
         className="flex min-h-0 flex-1 flex-col"
       >
         <TabsList className="mx-6 mt-3 w-fit">
@@ -276,46 +298,56 @@ export function PlayerSpawnsPage() {
           <TabsContent
             key={kind}
             value={kind}
-            className="min-h-0 flex-1 overflow-y-auto px-6 pb-8 pt-4"
+            className="flex min-h-0 flex-1 flex-col overflow-hidden px-6 pb-6 pt-4"
           >
             <KindHeader
               label={KIND_META[kind].label}
               description={KIND_META[kind].description}
               count={draft[kind].length}
             />
-            <PositionsEditor
-              positions={draft[kind]}
-              onChange={(next) => updateKind(kind, next)}
-            />
+            <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(280px,22rem)_1fr]">
+              <div className="min-h-0 overflow-y-auto">
+                <PositionsEditor
+                  positions={draft[kind]}
+                  selectedIndex={selectedIndex}
+                  onSelect={setSelectedIndex}
+                  onChange={(next) => {
+                    updateKind(kind, next);
+                    if (
+                      selectedIndex !== null &&
+                      selectedIndex >= next.length
+                    ) {
+                      setSelectedIndex(next.length ? next.length - 1 : null);
+                    }
+                  }}
+                />
+              </div>
+              <div className="min-h-[280px] lg:min-h-0">
+                {kind === tab ? (
+                  <SpawnPlacementMap
+                    data={draft}
+                    kind={kind}
+                    mapId={mapId}
+                    selectedIndex={selectedIndex}
+                    onSelectIndex={setSelectedIndex}
+                    onChange={setDraft}
+                    addMode={addMode}
+                    onAddModeChange={setAddMode}
+                    readOnly={update.isPending}
+                  />
+                ) : null}
+              </div>
+            </div>
           </TabsContent>
         ))}
       </Tabs>
 
-      <Dialog open={confirmSave} onOpenChange={setConfirmSave}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Save will drop unsupported blocks</DialogTitle>
-            <DialogDescription className="text-xs">
-              This file contains <code>generator_deviate</code> or{" "}
-              <code>generator_random</code> sections that this editor
-              doesn't round-trip. Saving will write out only the
-              posbubbles lists and strip the other generators.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setConfirmSave(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={() => save(true)}
-              disabled={update.isPending}
-            >
-              Save anyway
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <UnsupportedGeneratorsSaveDialog
+        open={confirmSave}
+        onOpenChange={setConfirmSave}
+        onConfirm={() => save(true)}
+        pending={update.isPending}
+      />
     </div>
   );
 }
@@ -349,16 +381,23 @@ function PlayerSpawnsExplainer() {
         to spread starting locations.
       </p>
       <p>
+        <strong className="text-foreground">This page</strong> owns
+        the file: table, paste-import, bulk yaw, and a placement map
+        for the active kind. Drag pins, click to add, rotate yaw on
+        the selected marker (arrow points the facing; 0 = north).
+      </p>
+      <p>
+        <strong className="text-foreground">World map</strong>{" "}
+        (Show in world map) is for seeing these bubbles next to
+        events, territories and CE tiers — not for paste or bulk
+        edits.
+      </p>
+      <p>
         <strong className="text-foreground">Paste-import</strong> is
         useful when you've got a list of coordinates from an admin
         tool — it accepts formats like{" "}
         <code>6644 2464 91.4</code> or{" "}
         <code>x=6644 z=2464 a=91.4</code>, one line per position.
-      </p>
-      <p className="italic">
-        A proper map view is coming in the next phase — for now this
-        is a tabular editor. Use DayZ mapping sites (iZurvive etc.)
-        to look up coordinates if you're placing points by hand.
       </p>
     </Explainer>
   );
@@ -388,14 +427,21 @@ function KindHeader({
 
 function PositionsEditor({
   positions,
+  selectedIndex,
+  onSelect,
   onChange,
 }: {
   positions: SpawnPosition[];
+  selectedIndex: number | null;
+  onSelect: (index: number | null) => void;
   onChange: (next: SpawnPosition[]) => void;
 }) {
   const [pasteOpen, setPasteOpen] = useState(false);
 
-  const add = () => onChange([...positions, { x: 0, z: 0, a: 0 }]);
+  const add = () => {
+    onChange([...positions, { x: 0, z: 0, a: 0 }]);
+    onSelect(positions.length);
+  };
   const update = (i: number, patch: Partial<SpawnPosition>) =>
     onChange(positions.map((p, ii) => (ii === i ? { ...p, ...patch } : p)));
   const remove = (i: number) =>
@@ -431,9 +477,8 @@ function PositionsEditor({
 
       {positions.length === 0 ? (
         <div className="rounded-md border border-dashed border-border/60 p-6 text-center text-xs text-muted-foreground">
-          No positions in this list. Click Add to enter coordinates by
-          hand, or Paste import to drop a block of coordinates from
-          iZurvive / admin tools.
+          No positions yet. Place them on the map, click Add for a
+          blank row, or Paste import a list of coordinates.
         </div>
       ) : (
         <div className="space-y-1">
@@ -460,7 +505,11 @@ function PositionsEditor({
           {positions.map((p, i) => (
             <div
               key={i}
-              className="grid grid-cols-[40px_1fr_1fr_100px_32px] items-center gap-2"
+              onClick={() => onSelect(i)}
+              className={cn(
+                "grid grid-cols-[40px_1fr_1fr_100px_32px] items-center gap-2 rounded-md px-1 py-0.5",
+                selectedIndex === i && "bg-primary/10",
+              )}
             >
               <span className="text-right text-[10px] text-muted-foreground tabular-nums">
                 {i + 1}

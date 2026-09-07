@@ -1,5 +1,10 @@
 export type PlayerSpawnKind = "fresh" | "hop" | "travel";
 
+export interface SpawnSelection {
+  kind: PlayerSpawnKind;
+  index: number;
+}
+
 export type MapLayerId =
   | "player-spawns"
   | "event-positions"

@@ -67,6 +67,10 @@ import {
   usePlayerSpawnsUpdate,
 } from "@/hooks/usePlayerSpawns";
 import {
+  needsUnsupportedGeneratorConfirm,
+  UnsupportedGeneratorsSaveDialog,
+} from "@/features/player-spawns/UnsupportedGeneratorsSaveDialog";
+import {
   useCfgEnvironmentUpdate,
   useTerritoriesAddAnimal,
   useTerritoriesRemoveAnimal,
@@ -123,6 +127,7 @@ import type {
   MapLayerId,
   MapSectionId,
   PlayerSpawnKind,
+  SpawnSelection,
 } from "./types";
 import { DEFAULT_LAYERS } from "./types";
 
@@ -282,6 +287,10 @@ export function MapPage() {
   // `eventAdd` is the event name to append positions to.
   const [spawnAdd, setSpawnAdd] = useState<PlayerSpawnKind | null>(null);
   const [eventAdd, setEventAdd] = useState<string | null>(null);
+  const [selectedSpawn, setSelectedSpawn] = useState<SpawnSelection | null>(
+    null,
+  );
+  const [confirmSpawnSave, setConfirmSpawnSave] = useState(false);
 
   // Placements are heavy (~11k rows for vanilla Chernarus). Fetch
   // lazily — only when the user has the building-placements layer
@@ -628,7 +637,16 @@ export function MapPage() {
 
   // ---------- Save / revert ----------
 
-  const save = () => {
+  const save = (forceSpawns = false) => {
+    if (
+      spawnsDirty &&
+      needsUnsupportedGeneratorConfirm(spawnsDraft) &&
+      !forceSpawns
+    ) {
+      setConfirmSpawnSave(true);
+      return;
+    }
+    setConfirmSpawnSave(false);
     if (spawnsDirty && spawnsDraft) {
       updateSpawns.mutate(spawnsDraft, {
         onSuccess: () =>
@@ -815,6 +833,10 @@ export function MapPage() {
       setSpawnsDraft({
         ...spawnsDraft,
         [spawnAdd]: [...spawnsDraft[spawnAdd], next],
+      });
+      setSelectedSpawn({
+        kind: spawnAdd,
+        index: spawnsDraft[spawnAdd].length,
       });
       return;
     }
@@ -1088,7 +1110,7 @@ export function MapPage() {
             </Button>
             <Button
               size="sm"
-              onClick={save}
+              onClick={() => save()}
               disabled={!anyDirty || savePending}
             >
               {savePending ? (
@@ -1511,6 +1533,8 @@ export function MapPage() {
               state={layers.playerSpawns}
               mapId={mapId}
               onChange={setSpawnsDraft}
+              selected={selectedSpawn}
+              onSelect={setSelectedSpawn}
               readOnly={savePending}
             />
             <EventPositionsLayer
@@ -1643,6 +1667,13 @@ export function MapPage() {
           />
         </DialogContent>
       </Dialog>
+
+      <UnsupportedGeneratorsSaveDialog
+        open={confirmSpawnSave}
+        onOpenChange={setConfirmSpawnSave}
+        onConfirm={() => save(true)}
+        pending={savePending}
+      />
 
       <DownloadIzurviveDialog
         open={izurviveOpen}
@@ -3654,10 +3685,12 @@ function MapExplainer() {
         and <code>cfgeventspawns.xml</code> — each only if it has
         unsaved changes. The toasts confirm which file was written.
       </p>
-      <p className="italic">
-        Deferred for later phases: infected territories, animal zones,
-        contaminated areas, tier-coverage heatmap. Those will layer on
-        top of whatever backdrop you've loaded.
+      <p>
+        <strong className="text-foreground">Player spawn yaw.</strong>{" "}
+        The arrow on each pin is facing direction (0 = north). Drag to
+        move; the popup slider rotates. Bulk paste and randomise yaws
+        live on the Player Spawns page — this canvas is for placing
+        them next to events and territories.
       </p>
     </Explainer>
   );

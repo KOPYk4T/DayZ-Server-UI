@@ -6,6 +6,24 @@ import type { EventSpawnGroup, PlayerSpawnPoints } from "@/types/ipc";
 import { dayzToLatLng } from "./dayzMap";
 import type { PlayerSpawnKind } from "./types";
 
+/** Re-centres on a specific spawn when `focusKey` changes (kind+index).
+ *  Ignores later x/z updates so dragging the same pin doesn't fight
+ *  the camera. */
+export function useFlyToSpawnAt(
+  pos: { x: number; z: number } | null,
+  focusKey: string | null,
+  zoom = 0,
+) {
+  const map = useMap();
+  useEffect(() => {
+    if (!pos || !focusKey) return;
+    map.flyTo(dayzToLatLng(pos.x, pos.z), Math.max(map.getZoom(), zoom), {
+      duration: 0.35,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusKey]);
+}
+
 /** Re-centres the Leaflet map on the first marker of the requested
  *  kind. Used when the user lands on the map via a "show on map"
  *  deep-link. Split into its own file so it lives next to components

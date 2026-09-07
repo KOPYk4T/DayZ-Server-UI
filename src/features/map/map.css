@@ -39,3 +39,46 @@
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
   box-sizing: border-box;
 }
+
+/* Player-spawn pin: yaw arrow (0° = north / up) + selected ring. */
+.dayz-spawn-marker {
+  position: relative;
+  width: 28px;
+  height: 28px;
+  pointer-events: none;
+}
+.dayz-spawn-rotator {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 50%;
+}
+.dayz-spawn-arrow {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 0;
+  height: 0;
+  margin-left: -4px;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-bottom: 10px solid var(--spawn-color);
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.7));
+}
+.dayz-spawn-dot {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 9999px;
+  background: var(--spawn-color);
+  border: 1.5px solid rgba(0, 0, 0, 0.65);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.4);
+  box-sizing: border-box;
+}
+.dayz-spawn-marker.is-selected .dayz-spawn-dot {
+  box-shadow:
+    0 0 0 2px var(--background, #111),
+    0 0 0 4px var(--spawn-color);
+}
