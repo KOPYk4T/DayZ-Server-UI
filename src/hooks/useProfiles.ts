@@ -61,6 +61,7 @@ export function useUpdateProfile() {
       qc.invalidateQueries({ queryKey: KEY.all });
       qc.setQueryData(KEY.one(p.id), p);
       qc.invalidateQueries({ queryKey: ["profiles", p.id, "secrets"] });
+      qc.invalidateQueries({ queryKey: KEY.status(p.id) });
       // Keep the in-app "active profile" banner + downstream hooks in
       // sync when the user edits the profile they're currently viewing.
       if (activeProfile?.id === p.id) setActive(p);

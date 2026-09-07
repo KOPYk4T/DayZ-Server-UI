@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "information-architecture": {
+      "source": "owl-listener/designer-skills",
+      "sourceType": "github",
+      "skillPath": "ux-strategy/skills/information-architecture/SKILL.md",
+      "computedHash": "46fa01cb73fa184ef981a27e573d5b2eedb49e42d074cc9504c56ec12695fc83"
+    }
+  }
+}

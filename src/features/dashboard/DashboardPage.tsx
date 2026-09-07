@@ -1,28 +1,28 @@
-import { useMemo } from "react";
+import { useMemo, type ComponentType, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  AlertTriangle,
+  Activity,
   ArrowDownToLine,
+  ArrowRight,
   ArrowUpFromLine,
   Boxes,
-  CheckCircle2,
   Compass,
-  GitCommit,
+  FileStack,
+  HardDrive,
   Home,
-  Info,
   Loader2,
-  Map as MapIcon,
-  Plug,
-  ShieldAlert,
+  MapPin,
+  Package,
+  Server,
   Target,
-  XCircle,
-  Zap,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
   Card,
+  CardAction,
   CardContent,
+  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -106,6 +106,17 @@ export function DashboardPage() {
     );
   }, [limits.data]);
 
+  const remoteLabel =
+    profile?.sftp
+      ? `${profile.sftp.username}@${profile.sftp.host}`
+      : null;
+  const localLabel = status.data?.localServerPath
+    ?? profile?.workDir
+    ?? profile?.local?.rootPath
+    ?? null;
+  const lastImport = formatRelativeTime(
+    status.data?.lastPullAt ?? profile?.lastPullAt ?? undefined,
+  );
   return (
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader
@@ -114,161 +125,182 @@ export function DashboardPage() {
         description={
           profile
             ? `Working on ${profile.name}.`
-            : "No profile loaded — go back to the profile picker."
+            : "No profile loaded. Open the profile picker."
         }
       />
-      <div className="space-y-6 overflow-y-auto p-6">
 
-      {/* Quick actions — one click to the most common operations */}
-      <Card>
-        <CardHeader className="flex-row items-center justify-between pb-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Zap className="h-4 w-4" /> Quick actions
-          </CardTitle>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 px-2 text-[11px]"
-            onClick={() => navigate("/app/getting-started")}
-          >
-            <Compass className="mr-1 h-3 w-3" /> Getting started →
-          </Button>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <QuickAction
-              icon={<ArrowDownToLine className="h-4 w-4" />}
-              label="Pull"
-              hint="refresh from server"
-              onClick={() => navigate("/app/sync")}
-            />
-            <QuickAction
-              icon={<ArrowUpFromLine className="h-4 w-4" />}
-              label="Review push"
-              hint={
-                unsaved > 0
-                  ? `${unsaved} unsaved`
-                  : "no local changes yet"
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-6 py-6">
+        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_17rem]">
+          <div className="space-y-4">
+            <HomeBlock icon={MapPin} title="Places">
+              <div className="space-y-2">
+                <PlaceLine
+                  icon={Server}
+                  label="Remote"
+                  value={remoteLabel ?? "not set"}
+                  empty={!remoteLabel}
+                />
+                <PlaceLine
+                  icon={HardDrive}
+                  label="Local server"
+                  value={localLabel ?? "not set"}
+                  empty={!localLabel}
+                />
+              </div>
+              {unsaved > 0 ? (
+                <p className="type-body mt-3">
+                  Workspace · {unsaved} file{unsaved === 1 ? "" : "s"} since
+                  last import
+                </p>
+              ) : null}
+              <p className="type-hint mt-3">
+                {profile?.map ?? "—"}
+                {profile?.paths.mpmissionsRelative
+                  ? ` · ${profile.paths.mpmissionsRelative}`
+                  : ""}
+                {lastImport !== "never" ? ` · imported ${lastImport}` : ""}
+              </p>
+            </HomeBlock>
+
+            <HomeBlock
+              icon={Activity}
+              title="Health"
+              action={
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => navigate("/app/health")}
+                >
+                  Open Health
+                </Button>
               }
-              onClick={() => navigate("/app/sync")}
-              emphasise={unsaved > 0}
-            />
-            <QuickAction
-              icon={<Boxes className="h-4 w-4" />}
-              label="Types"
-              hint={`${items.data?.items.length?.toLocaleString() ?? "—"} classes`}
-              onClick={() => navigate("/app/items")}
-            />
-            <QuickAction
-              icon={<Target className="h-4 w-4" />}
-              label="Events"
-              hint={`${events.data?.events.length ?? "—"} events`}
-              onClick={() => navigate("/app/events")}
-            />
+            >
+              <div className="flex flex-wrap gap-2">
+                {healthCounts.e === 0 &&
+                healthCounts.w === 0 &&
+                orphanCount === 0 ? (
+                  <span className="type-hint">No errors or warnings</span>
+                ) : (
+                  <>
+                    <HealthCount
+                      n={healthCounts.e}
+                      label="errors"
+                      tone={healthCounts.e > 0 ? "error" : "ok"}
+                      onClick={() => navigate("/app/health")}
+                    />
+                    {healthCounts.w > 0 ? (
+                      <HealthCount
+                        n={healthCounts.w}
+                        label="warnings"
+                        tone="warning"
+                        onClick={() => navigate("/app/health")}
+                      />
+                    ) : null}
+                    {orphanCount > 0 ? (
+                      <HealthCount
+                        n={orphanCount}
+                        label="orphan limits"
+                        tone="warning"
+                        onClick={() => navigate("/app/zones-tiers")}
+                      />
+                    ) : null}
+                  </>
+                )}
+              </div>
+            </HomeBlock>
           </div>
-        </CardContent>
-      </Card>
 
-      {/* Profile status cards */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-        <StatCard
-          icon={<Plug className="h-4 w-4" />}
-          label="Mode"
-          value={profile?.mode.toUpperCase() ?? "—"}
-          hint={
-            profile?.mode === "sftp"
-              ? `${profile.sftp?.username}@${profile.sftp?.host}`
-              : (profile?.local?.rootPath ?? "")
+          <HomeBlock icon={ArrowRight} title="Next">
+            <div className="flex flex-col gap-2">
+              <Button
+                className="w-full justify-start"
+                onClick={() => navigate("/app/sync")}
+              >
+                <ArrowDownToLine />
+                Sync to local
+              </Button>
+              <Button
+                className="w-full justify-start"
+                variant="secondary"
+                onClick={() => navigate("/app/sync")}
+              >
+                <ArrowUpFromLine />
+                Push to Remote
+              </Button>
+              <Button
+                className="w-full justify-start"
+                variant="outline"
+                onClick={() => navigate("/app/items")}
+              >
+                <Package />
+                Open Types
+              </Button>
+            </div>
+          </HomeBlock>
+        </div>
+
+        <HomeBlock
+          icon={Compass}
+          title="Quick steps"
+          action={
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => navigate("/app/getting-started")}
+            >
+              <Compass />
+              Getting started
+            </Button>
           }
-        />
-        <StatCard
-          icon={<GitCommit className="h-4 w-4" />}
-          label="Last pull"
-          value={formatRelativeTime(
-            status.data?.lastPullAt ?? profile?.lastPullAt ?? undefined,
-          )}
-          hint={profile?.paths.mpmissionsRelative ?? ""}
-        />
-        <StatCard
-          icon={<ArrowUpFromLine className="h-4 w-4" />}
-          label="Unsaved"
-          value={
-            localDiff.isFetching && !localDiff.data
-              ? "…"
-              : `${unsaved}`
+        >
+          <ol className="grid gap-6 sm:grid-cols-3">
+            <Step
+              n="1"
+              title="Edit in the workspace"
+              body="Types, events, loadouts. Nothing leaves this PC until you sync."
+            />
+            <Step
+              n="2"
+              title="Sync to local"
+              body="Review the diff, copy it to the dedicated folder, restart the server."
+            />
+            <Step
+              n="3"
+              title="Push to Remote"
+              body="Same reviewed diff, to SFTP, after the local test looks right."
+            />
+          </ol>
+        </HomeBlock>
+
+        <HomeBlock
+          icon={Boxes}
+          title="Economy"
+          hint="Classes in types.xml, by source and usage."
+          action={
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => navigate("/app/items")}
+            >
+              <Package />
+              Open Items
+            </Button>
           }
-          hint={unsaved > 0 ? "files vs last pull" : "workspace clean"}
-        />
-        <StatCard
-          icon={<MapIcon className="h-4 w-4" />}
-          label="Map"
-          value={profile?.map ?? "—"}
-          hint={profile?.customMapId ?? ""}
-        />
-      </div>
-
-      {/* Health + orphans summary */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
-        <HealthCard
-          icon={<XCircle className="h-4 w-4 text-severity-error" />}
-          label="Errors"
-          value={healthCounts.e}
-          onClick={() => navigate("/app/health")}
-          emphasise={healthCounts.e > 0}
-        />
-        <HealthCard
-          icon={<AlertTriangle className="h-4 w-4 text-severity-warning" />}
-          label="Warnings"
-          value={healthCounts.w}
-          onClick={() => navigate("/app/health")}
-          emphasise={healthCounts.w > 0}
-        />
-        <HealthCard
-          icon={<Info className="h-4 w-4 text-severity-info" />}
-          label="Info"
-          value={healthCounts.i}
-          onClick={() => navigate("/app/health")}
-        />
-        <HealthCard
-          icon={<ShieldAlert className="h-4 w-4 text-muted-foreground" />}
-          label="Orphan limit refs"
-          value={orphanCount}
-          onClick={() => navigate("/app/zones-tiers")}
-          emphasise={orphanCount > 0}
-          hint="Names used on items but not declared in cfglimitsdefinition"
-        />
-      </div>
-
-      {/* Economy snapshot */}
-      <Card>
-        <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">Economy snapshot</CardTitle>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 px-2 text-[11px]"
-            onClick={() => navigate("/app/items")}
-          >
-            Open Items →
-          </Button>
-        </CardHeader>
-        <CardContent>
+        >
           {itemsLoading ? (
             <LoadingLine />
           ) : (
-            <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+            <div className="grid gap-10 md:grid-cols-3">
               <SourceBreakdown stats={stats} />
               <TopList
-                title="Top categories"
-                icon={<Boxes className="h-3.5 w-3.5" />}
+                title="Categories"
                 entries={stats.topCategories}
                 onClickEntry={(name) =>
                   navigate(`/app/items?category=${encodeURIComponent(name)}`)
                 }
               />
               <TopList
-                title="Top usage zones"
-                icon={<Target className="h-3.5 w-3.5" />}
+                title="Usage zones"
                 entries={stats.topUsages}
                 onClickEntry={(name) =>
                   navigate(`/app/items?usage=${encodeURIComponent(name)}`)
@@ -276,31 +308,30 @@ export function DashboardPage() {
               />
             </div>
           )}
-        </CardContent>
-      </Card>
+        </HomeBlock>
 
-      {/* Balance */}
-      <Card>
-        <CardHeader className="flex-row items-center justify-between">
-          <CardTitle className="text-base">Balance — spawn coverage</CardTitle>
-          <Button
-            size="sm"
-            variant="ghost"
-            className="h-7 px-2 text-[11px]"
-            onClick={() => navigate("/app/health")}
-          >
-            View balance lints →
-          </Button>
-        </CardHeader>
-        <CardContent>
+        <HomeBlock
+          icon={Target}
+          title="Spawn coverage"
+          hint="Nominal rolled up by zone and tier."
+          action={
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => navigate("/app/health")}
+            >
+              <Activity />
+              Open balance lints
+            </Button>
+          }
+        >
           {itemsLoading ? (
             <LoadingLine />
           ) : (
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+            <div className="space-y-6">
+              <div className="grid gap-10 md:grid-cols-2">
                 <TopList
-                  title="Nominal by usage zone"
-                  icon={<Target className="h-3.5 w-3.5" />}
+                  title="By usage zone"
                   entries={balance.byUsage
                     .slice(0, 8)
                     .map((e) => ({ name: e.name, count: e.total }))}
@@ -309,8 +340,7 @@ export function DashboardPage() {
                   }
                 />
                 <TopList
-                  title="Nominal by tier (value)"
-                  icon={<ShieldAlert className="h-3.5 w-3.5" />}
+                  title="By tier"
                   entries={balance.byTier
                     .slice(0, 8)
                     .map((e) => ({ name: e.name, count: e.total }))}
@@ -320,133 +350,85 @@ export function DashboardPage() {
                 />
               </div>
               {balance.neverSpawnCount > 0 ? (
-                <div className="rounded-md border border-severity-warning/40 bg-severity-warning/5 p-3 text-xs">
-                  <strong className="text-severity-warning">
+                <p className="type-body max-w-[65ch]">
+                  <span className="text-severity-warning">
                     {balance.neverSpawnCount}
-                  </strong>{" "}
-                  item{balance.neverSpawnCount === 1 ? "" : "s"} with{" "}
-                  <code>nominal &gt; 0</code> but no usage zone — CE will
-                  not place them through the normal loot loop.{" "}
-                  <button
-                    type="button"
+                  </span>{" "}
+                  item{balance.neverSpawnCount === 1 ? "" : "s"} have nominal
+                  above 0 and no usage zone. CE will not place them in the
+                  loot loop.{" "}
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="h-auto px-0"
                     onClick={() => navigate("/app/health?domain=balance")}
-                    className="underline hover:text-foreground"
                   >
-                    Review in Health →
-                  </button>
-                </div>
+                    Review in Health
+                  </Button>
+                </p>
               ) : null}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </HomeBlock>
 
-      {/* Events + Loadouts summary */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader className="flex-row items-center justify-between">
-            <CardTitle className="text-base">Events</CardTitle>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 px-2 text-[11px]"
-              onClick={() => navigate("/app/events")}
-            >
-              Open →
-            </Button>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {events.isLoading ? (
-              <LoadingLine />
-            ) : (
-              <>
-                <TwoCol
-                  left={`${eventStats.total} total`}
-                  right={`${eventStats.active} active`}
+        <HomeBlock icon={FileStack} title="Mission files">
+          <div className="grid gap-8 md:grid-cols-2">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="type-section">Events</h3>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => navigate("/app/events")}
+                >
+                  Open Events
+                </Button>
+              </div>
+              {events.isLoading ? (
+                <LoadingLine />
+              ) : (
+                <PairList
+                  rows={[
+                    ["Total", eventStats.total],
+                    ["Active", eventStats.active],
+                    ["Fixed position", eventStats.fixed],
+                    ["Random position", eventStats.random],
+                    ["Script placed", eventStats.scriptPlaced],
+                    ["Positions", eventStats.totalSpawnPositions],
+                  ]}
                 />
-                <TwoCol
-                  left={`${eventStats.fixed} fixed-position`}
-                  right={`${eventStats.random} random-position`}
+              )}
+            </div>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="type-section">Loadouts</h3>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => navigate("/app/loadouts")}
+                >
+                  Open Loadouts
+                </Button>
+              </div>
+              {loadouts.isLoading ? (
+                <LoadingLine />
+              ) : (
+                <PairList
+                  rows={[
+                    ["Spawnables", loadoutStats.spawnables],
+                    ["Random presets", loadoutStats.presets],
+                    ["Hoarders", loadoutStats.hoarders],
+                    ["With attachments", loadoutStats.withAttachments],
+                    ["With cargo", loadoutStats.withCargo],
+                    ["Item references", loadoutStats.totalReferences],
+                  ]}
                 />
-                <TwoCol
-                  left={`${eventStats.scriptPlaced} script-placed`}
-                  right={`${eventStats.totalSpawnPositions} positions`}
-                />
-              </>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex-row items-center justify-between">
-            <CardTitle className="text-base">Loadouts</CardTitle>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 px-2 text-[11px]"
-              onClick={() => navigate("/app/loadouts")}
-            >
-              Open →
-            </Button>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {loadouts.isLoading ? (
-              <LoadingLine />
-            ) : (
-              <>
-                <TwoCol
-                  left={`${loadoutStats.spawnables} spawnables`}
-                  right={`${loadoutStats.presets} random presets`}
-                />
-                <TwoCol
-                  left={`${loadoutStats.hoarders} hoarders`}
-                  right={`${loadoutStats.withAttachments} with attachments`}
-                />
-                <TwoCol
-                  left={`${loadoutStats.withCargo} with cargo`}
-                  right={`${loadoutStats.totalReferences} item references`}
-                />
-              </>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-
+              )}
+            </div>
+          </div>
+        </HomeBlock>
       </div>
     </div>
-  );
-}
-
-function QuickAction({
-  icon,
-  label,
-  hint,
-  onClick,
-  emphasise,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  hint?: string;
-  onClick: () => void;
-  emphasise?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex flex-col gap-1 rounded-md border border-border/60 bg-card p-3 text-left transition-colors hover:border-border hover:bg-muted/40",
-        emphasise && "ring-1 ring-primary/50",
-      )}
-    >
-      <span className="flex items-center gap-2 text-sm font-medium">
-        {icon}
-        {label}
-      </span>
-      {hint ? (
-        <span className="text-[11px] text-muted-foreground">{hint}</span>
-      ) : null}
-    </button>
   );
 }
 
@@ -569,110 +551,142 @@ function buildLoadoutStats(
 
 // ---------- Small components ----------
 
-function StatCard({
-  icon,
-  label,
-  value,
+function HomeBlock({
+  icon: Icon,
+  title,
   hint,
+  action,
+  children,
 }: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
+  icon: ComponentType<{ className?: string }>;
+  title: string;
   hint?: string;
+  action?: ReactNode;
+  children: ReactNode;
 }) {
   return (
     <Card>
-      <CardContent className="pt-4">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          {icon}
-          {label}
-        </div>
-        <div className="mt-1 text-xl font-medium tabular-nums">{value}</div>
-        {hint ? (
-          <div className="mt-1 truncate font-mono text-xs text-muted-foreground">
-            {hint}
+      <CardHeader className="border-b border-border pb-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-muted">
+            <Icon className="size-4 text-muted-foreground" />
+          </span>
+          <div className="min-w-0 space-y-0.5">
+            <CardTitle className="type-block">{title}</CardTitle>
+            {hint ? <CardDescription>{hint}</CardDescription> : null}
           </div>
-        ) : null}
-      </CardContent>
+        </div>
+        {action ? <CardAction>{action}</CardAction> : null}
+      </CardHeader>
+      <CardContent>{children}</CardContent>
     </Card>
   );
 }
 
-function HealthCard({
-  icon,
+function PlaceLine({
+  icon: Icon,
   label,
   value,
-  hint,
-  onClick,
-  emphasise,
+  empty,
 }: {
-  icon: React.ReactNode;
+  icon: ComponentType<{ className?: string }>;
   label: string;
-  value: number;
-  hint?: string;
-  onClick: () => void;
-  emphasise?: boolean;
+  value: string;
+  empty?: boolean;
 }) {
-  const zero = value === 0;
+  return (
+    <div className="flex items-center gap-3 rounded-md bg-muted/40 px-3 py-2.5">
+      <Icon className="size-4 shrink-0 text-muted-foreground" />
+      <span className="type-hint w-30 shrink-0">{label}</span>
+      <span
+        className={cn(
+          "min-w-0 truncate",
+          empty ? "type-hint" : "type-mono text-foreground",
+        )}
+        title={value}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function Step({
+  n,
+  title,
+  body,
+}: {
+  n: string;
+  title: string;
+  body: string;
+}) {
+  return (
+    <li className="min-w-0">
+      <span className="flex size-7 items-center justify-center rounded-md bg-muted type-mono text-foreground">
+        {n}
+      </span>
+      <p className="type-section mt-3">{title}</p>
+      <p className="type-hint mt-1.5 max-w-[36ch]">{body}</p>
+    </li>
+  );
+}
+
+function HealthCount({
+  n,
+  label,
+  tone,
+  onClick,
+}: {
+  n: number;
+  label: string;
+  tone: "error" | "warning" | "ok" | "muted";
+  onClick?: () => void;
+}) {
+  const color =
+    tone === "error"
+      ? "text-severity-error"
+      : tone === "warning"
+        ? "text-severity-warning"
+        : tone === "ok"
+          ? "text-severity-success"
+          : "text-foreground";
+  const chip =
+    tone === "error"
+      ? "border-severity-error/30 bg-severity-error/10"
+      : tone === "warning"
+        ? "border-severity-warning/30 bg-severity-warning/10"
+        : tone === "ok"
+          ? "border-severity-success/30 bg-severity-success/10"
+          : "border-border bg-muted/40";
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
-        "flex items-start gap-3 rounded-md border border-border/60 bg-card p-3 text-left transition-colors hover:bg-muted/30",
-        emphasise && "ring-1 ring-severity-warning/40",
+        "flex items-baseline gap-2 rounded-md border px-3 py-2 text-left transition-colors hover:bg-accent",
+        chip,
       )}
     >
-      <div className="mt-0.5">
-        {zero && !emphasise ? (
-          <CheckCircle2 className="h-4 w-4 text-severity-success" />
-        ) : (
-          icon
-        )}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-          {label}
-        </div>
-        <div className="text-2xl font-semibold tabular-nums">{value}</div>
-        {hint ? (
-          <div className="mt-0.5 text-[11px] text-muted-foreground">{hint}</div>
-        ) : null}
-      </div>
+      <span className={cn("text-lg font-semibold tabular-nums", color)}>{n}</span>
+      <span className="type-hint">{label}</span>
     </button>
   );
 }
 
 function SourceBreakdown({ stats }: { stats: ItemsStats }) {
   return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 text-xs font-semibold">
-        <Boxes className="h-3.5 w-3.5" />
-        <span>Items</span>
-        <span className="ml-auto text-muted-foreground tabular-nums">
+    <div className="space-y-3">
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 className="type-section">Items</h3>
+        <span className="type-mono tabular-nums">
           {stats.total.toLocaleString()}
         </span>
       </div>
-      <BarRow
-        label="Vanilla"
-        value={stats.bySource.vanilla}
-        total={stats.total}
-        color="var(--brand-cream-dim)"
-      />
-      <BarRow
-        label="Mod"
-        value={stats.bySource.mod}
-        total={stats.total}
-        color="var(--brand-olive-light)"
-      />
-      <BarRow
-        label="Custom"
-        value={stats.bySource.custom}
-        total={stats.total}
-        color="var(--brand-rust)"
-      />
-      <div className="pt-2 text-[11px] text-muted-foreground">
-        Total nominal:{" "}
+      <BarRow label="Vanilla" value={stats.bySource.vanilla} total={stats.total} />
+      <BarRow label="Mod" value={stats.bySource.mod} total={stats.total} />
+      <BarRow label="Custom" value={stats.bySource.custom} total={stats.total} />
+      <p className="type-hint pt-1">
+        Nominal{" "}
         <span className="tabular-nums text-foreground">
           {stats.totalNominal.toLocaleString()}
         </span>
@@ -680,49 +694,39 @@ function SourceBreakdown({ stats }: { stats: ItemsStats }) {
           <>
             {" · "}
             <span className="text-severity-warning">
-              {stats.withZeroNominal.toLocaleString()} with nominal=0
+              {stats.withZeroNominal.toLocaleString()} at 0
             </span>
           </>
         ) : null}
-      </div>
+      </p>
     </div>
   );
 }
 
 function TopList({
   title,
-  icon,
   entries,
   onClickEntry,
 }: {
   title: string;
-  icon: React.ReactNode;
   entries: { name: string; count: number }[];
   onClickEntry: (name: string) => void;
 }) {
   const max = entries[0]?.count ?? 0;
   return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 text-xs font-semibold">
-        {icon}
-        <span>{title}</span>
-      </div>
+    <div className="space-y-3">
+      <h3 className="type-section">{title}</h3>
       {entries.length === 0 ? (
-        <div className="text-[11px] text-muted-foreground">None yet.</div>
+        <p className="type-hint">None yet.</p>
       ) : (
         entries.map((e) => (
           <button
             key={e.name}
             type="button"
             onClick={() => onClickEntry(e.name)}
-            className="w-full text-left"
+            className="-mx-1 w-[calc(100%+0.5rem)] rounded-md px-1 py-1 text-left transition-colors hover:bg-muted/60"
           >
-            <BarRow
-              label={e.name}
-              value={e.count}
-              total={max}
-              color="var(--brand-olive-mid)"
-            />
+            <BarRow label={e.name} value={e.count} total={max} />
           </button>
         ))
       )}
@@ -734,52 +738,45 @@ function BarRow({
   label,
   value,
   total,
-  color,
 }: {
   label: string;
   value: number;
   total: number;
-  color: string;
 }) {
   const pct = total > 0 ? (value / total) * 100 : 0;
   return (
-    <div className="space-y-0.5">
-      <div className="flex items-center justify-between text-[11px]">
-        <span className="truncate font-mono">{label}</span>
-        <span className="text-muted-foreground tabular-nums">
-          {value.toLocaleString()}
-        </span>
+    <div className="space-y-1">
+      <div className="flex items-center justify-between gap-3">
+        <span className="type-mono truncate">{label}</span>
+        <span className="type-hint tabular-nums">{value.toLocaleString()}</span>
       </div>
-      <div className="h-1.5 w-full rounded-full bg-muted/60">
+      <div className="h-px w-full bg-border">
         <div
-          className="h-full rounded-full"
-          style={{
-            width: `${Math.min(100, pct)}%`,
-            background: color,
-          }}
+          className="h-px bg-foreground/50"
+          style={{ width: `${Math.min(100, pct)}%` }}
         />
       </div>
     </div>
   );
 }
 
-function TwoCol({ left, right }: { left: string; right: string }) {
+function PairList({ rows }: { rows: [string, number][] }) {
   return (
-    <div className="grid grid-cols-2 gap-2 text-sm">
-      <div className="rounded-md border border-border/40 bg-muted/20 px-2 py-1 tabular-nums">
-        {left}
-      </div>
-      <div className="rounded-md border border-border/40 bg-muted/20 px-2 py-1 tabular-nums">
-        {right}
-      </div>
-    </div>
+    <dl className="space-y-1.5">
+      {rows.map(([label, n]) => (
+        <div key={label} className="flex items-baseline justify-between gap-4">
+          <dt className="type-hint">{label}</dt>
+          <dd className="tabular-nums text-sm">{n.toLocaleString()}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
 function LoadingLine() {
   return (
-    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-      <Loader2 className="h-3 w-3 animate-spin" /> Loading…
+    <div className="type-hint flex items-center gap-2">
+      <Loader2 className="h-3 w-3 animate-spin" /> Loading
     </div>
   );
 }

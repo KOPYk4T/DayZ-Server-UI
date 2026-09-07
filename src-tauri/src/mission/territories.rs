@@ -162,6 +162,7 @@ mod tests {
             paths: ProfilePaths {
                 mpmissions_relative: mission_rel.into(),
                 profiles_relative: "profiles".into(),
+                local_profiles_relative: None,
             },
             map: MapId::Chernarusplus,
             custom_map_id: None,

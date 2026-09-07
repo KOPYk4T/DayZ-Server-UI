@@ -1,15 +1,18 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentType, type ReactNode } from "react";
 import { useForm, type Resolver, type UseFormReturn } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
+  ArrowLeftRight,
   CheckCircle2,
   FolderOpen,
   FolderSearch,
+  HardDrive,
   Loader2,
   PlugZap,
   RefreshCw,
+  Server,
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -38,8 +41,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   useCreateProfile,
   useTestConnectionDraft,
@@ -66,6 +67,7 @@ const schema = z
     rootPath: z.string().optional(),
     mpmissionsRelative: z.string().min(1, "mpmissions path is required"),
     profilesRelative: z.string().min(1, "profiles path is required"),
+    localProfilesRelative: z.string().optional(),
     map: z.enum(["chernarusplus", "enoch", "sakhal", "custom"]),
     customMapId: z.string().optional(),
     customMapSizeM: z.coerce
@@ -77,8 +79,21 @@ const schema = z
     workDir: z.string().optional(),
   })
   .superRefine((v, ctx) => {
-    if (v.mode === "sftp") {
-      if (!v.host) ctx.addIssue({ code: "custom", path: ["host"], message: "host is required" });
+    const hasRemote = !!v.host?.trim();
+    const hasLocal = !!(v.workDir?.trim() || v.rootPath?.trim());
+    if (!hasRemote && !hasLocal) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["host"],
+        message: "set Remote (SFTP) or Local server",
+      });
+      ctx.addIssue({
+        code: "custom",
+        path: ["workDir"],
+        message: "set Remote (SFTP) or Local server",
+      });
+    }
+    if (hasRemote) {
       if (!v.username)
         ctx.addIssue({ code: "custom", path: ["username"], message: "username is required" });
       if (!v.authType)
@@ -89,9 +104,6 @@ const schema = z
           path: ["privateKeyPath"],
           message: "private key path is required",
         });
-    }
-    if (v.mode === "local" && !v.rootPath) {
-      ctx.addIssue({ code: "custom", path: ["rootPath"], message: "root path is required" });
     }
     if (v.map === "custom" && !v.customMapId) {
       ctx.addIssue({
@@ -124,6 +136,7 @@ const DEFAULTS: FormValues = {
   rootPath: "",
   mpmissionsRelative: "mpmissions/dayzOffline.chernarusplus",
   profilesRelative: "profiles",
+  localProfilesRelative: "profiles",
   map: "chernarusplus",
   customMapId: "",
   customMapSizeM: undefined,
@@ -172,42 +185,52 @@ function ProfileFormDialogInner({ open, onOpenChange, profile }: Props) {
         rootPath: profile.local?.rootPath ?? "",
         mpmissionsRelative: profile.paths.mpmissionsRelative,
         profilesRelative: profile.paths.profilesRelative,
+        localProfilesRelative:
+          profile.paths.localProfilesRelative
+          ?? profile.paths.profilesRelative,
         map: profile.map,
         customMapId: profile.customMapId ?? "",
         customMapSizeM: profile.customMapSizeM ?? undefined,
-        workDir: profile.workDir ?? "",
+        workDir: profile.workDir ?? profile.local?.rootPath ?? "",
       });
     } else {
       form.reset(DEFAULTS);
     }
   }, [open, profile, form]);
 
-  const mode = form.watch("mode");
   const authType = form.watch("authType");
   const map = form.watch("map");
-  const rootPath = form.watch("rootPath");
+  const workDir = form.watch("workDir");
+  const host = form.watch("host");
+  const hasRemote = !!host?.trim();
   const mpmissionsRelative = form.watch("mpmissionsRelative");
   const profilesRelative = form.watch("profilesRelative");
+  const localProfilesRelative = form.watch("localProfilesRelative");
   // Subscribe to SFTP-gate fields so the Browse / Test buttons'
   // `disabled` props re-evaluate as the user types. Without these
   // watches `canBrowse(form.getValues())` reads stale values on
   // re-render and the buttons stay disabled after typing a host.
-  form.watch("host");
-  form.watch("username");
-  form.watch("privateKeyPath");
+  const username = form.watch("username");
+  const privateKeyPath = form.watch("privateKeyPath");
+  const password = form.watch("password");
+  const remoteReady = canLoadRemote(
+    { host, username, authType, privateKeyPath, password },
+    isEdit,
+  );
 
   const [scan, setScan] = useState<ServerRootScan | null>(null);
   const [scanning, setScanning] = useState(false);
   const [manualPaths, setManualPaths] = useState(false);
-  const showManualInputs = manualPaths || !scan?.rootExists;
 
   const testConnection = useTestConnectionDraft();
   const [testResult, setTestResult] = useState<ConnectionTestResult | null>(null);
   const [browsePurpose, setBrowsePurpose] = useState<BrowsePurpose | null>(
     null,
   );
+  const [remoteFolders, setRemoteFolders] = useState<string[] | null>(null);
+  const [loadingRemoteFolders, setLoadingRemoteFolders] = useState(false);
   // Fingerprint captured by a successful in-modal test. Persisted into
-  // the draft on save so Pull / Push don't error with "no host
+  // the draft on save so Sync / Push don't error with "no host
   // fingerprint on file" on the first sync after profile creation.
   const [capturedFingerprint, setCapturedFingerprint] = useState<string | null>(
     null,
@@ -220,6 +243,8 @@ function ProfileFormDialogInner({ open, onOpenChange, profile }: Props) {
       setScanning(false);
       setTestResult(null);
       setCapturedFingerprint(null);
+      setRemoteFolders(null);
+      setLoadingRemoteFolders(false);
     }
   }, [open]);
 
@@ -249,7 +274,7 @@ function ProfileFormDialogInner({ open, onOpenChange, profile }: Props) {
   };
 
   const runScan = async (pathOverride?: string) => {
-    const p = (pathOverride ?? rootPath ?? "").trim();
+    const p = (pathOverride ?? workDir ?? "").trim();
     if (!p) {
       setScan(null);
       return;
@@ -266,7 +291,12 @@ function ProfileFormDialogInner({ open, onOpenChange, profile }: Props) {
         }
         const profileFolder = result.profileFolders[0];
         if (profileFolder) {
-          fillIfDefault("profilesRelative", profileFolder.relativePath);
+          const hostNow = (form.getValues("host") ?? "").trim();
+          const name = folderName(profileFolder.relativePath);
+          fillIfDefault("localProfilesRelative", name);
+          if (!hostNow) {
+            fillIfDefault("profilesRelative", name);
+          }
         }
       }
     } catch (err) {
@@ -276,22 +306,47 @@ function ProfileFormDialogInner({ open, onOpenChange, profile }: Props) {
     }
   };
 
-  const pickRootPath = async () => {
-    const picked = await openDialog({ directory: true, multiple: false });
-    if (typeof picked === "string") {
-      form.setValue("rootPath", picked);
-      void runScan(picked);
-    }
-  };
-
   const pickKeyPath = async () => {
     const picked = await openDialog({ directory: false, multiple: false });
     if (typeof picked === "string") form.setValue("privateKeyPath", picked);
   };
 
+  const loadRemoteProfileFolders = async () => {
+    const values = form.getValues();
+    if (!canLoadRemote(values, isEdit)) {
+      toast.error("fill host, username, and auth before loading remote folders");
+      return;
+    }
+    setLoadingRemoteFolders(true);
+    try {
+      const { draft, secrets } = buildDraftAndSecrets(values);
+      const listed = await tauri.sftpBrowseDraft({
+        draft,
+        secrets,
+        existingId: profile?.id ?? null,
+        path: "",
+      });
+      const names = remoteProfileNames(listed.entries);
+      setRemoteFolders(names);
+      if (names.length === 1) {
+        fillIfDefault("profilesRelative", names[0]);
+      }
+      if (names.length === 0) {
+        toast.error("no profile folders found at the server root");
+      }
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setLoadingRemoteFolders(false);
+    }
+  };
+
   const pickWorkDir = async () => {
     const picked = await openDialog({ directory: true, multiple: false });
-    if (typeof picked === "string") form.setValue("workDir", picked);
+    if (typeof picked === "string") {
+      form.setValue("workDir", picked, { shouldValidate: true });
+      void runScan(picked);
+    }
   };
 
   const buildDraftAndSecrets = (
@@ -303,31 +358,42 @@ function ProfileFormDialogInner({ open, onOpenChange, profile }: Props) {
     // Rust side rejects `"22"` where `u16` is expected).
     const portNum = Number(v.port);
     const port = Number.isFinite(portNum) && portNum > 0 ? portNum : 22;
+    const remoteHost = v.host?.trim() ?? "";
+    const localFolder = (v.workDir?.trim() || v.rootPath?.trim() || "");
+    const asSftp = remoteHost.length > 0;
     const draft: ProfileDraft = {
       name: v.name.trim(),
-      mode: v.mode,
-      sftp:
-        v.mode === "sftp"
-          ? {
-              host: v.host?.trim() ?? "",
-              port,
-              username: v.username?.trim() ?? "",
-              authType: v.authType ?? "password",
-              privateKeyPath: v.privateKeyPath?.trim() || null,
-              // Prefer a just-captured fingerprint from an in-modal
-              // test; fall back to the saved profile's trusted one.
-              knownHostFingerprint:
-                capturedFingerprint ??
-                profile?.sftp?.knownHostFingerprint ??
-                null,
-              remoteRoot: v.remoteRoot?.trim() || null,
-            }
-          : null,
-      local:
-        v.mode === "local" ? { rootPath: v.rootPath?.trim() ?? "" } : null,
+      mode: asSftp ? "sftp" : "local",
+      sftp: asSftp
+        ? {
+            host: remoteHost,
+            port,
+            username: v.username?.trim() ?? "",
+            authType: v.authType ?? "password",
+            privateKeyPath: v.privateKeyPath?.trim() || null,
+            // Prefer a just-captured fingerprint from an in-modal
+            // test; fall back to the saved profile's trusted one.
+            knownHostFingerprint:
+              capturedFingerprint ??
+              profile?.sftp?.knownHostFingerprint ??
+              null,
+            remoteRoot: v.remoteRoot?.trim() || null,
+          }
+        : null,
+      local: asSftp ? null : { rootPath: localFolder },
       paths: {
         mpmissionsRelative: v.mpmissionsRelative.trim(),
-        profilesRelative: v.profilesRelative.trim(),
+        profilesRelative: asSftp
+          ? (folderName(v.profilesRelative) || "profiles")
+          : (folderName(v.localProfilesRelative)
+            || folderName(v.profilesRelative)
+            || "profiles"),
+        localProfilesRelative: asSftp
+          ? localProfilesAlias(
+              folderName(v.profilesRelative) || "profiles",
+              folderName(v.localProfilesRelative),
+            )
+          : null,
       },
       map: v.map,
       customMapId: v.map === "custom" ? v.customMapId?.trim() || null : null,
@@ -335,14 +401,14 @@ function ProfileFormDialogInner({ open, onOpenChange, profile }: Props) {
         v.map === "custom" && v.customMapSizeM != null
           ? Number(v.customMapSizeM)
           : null,
-      workDir: v.workDir?.trim() || null,
+      workDir: localFolder || null,
       remoteCommands: profile?.remoteCommands ?? null,
     };
 
     const secrets: ProfileSecrets = {
-      password: v.mode === "sftp" && v.authType === "password" ? v.password || null : null,
+      password: asSftp && v.authType === "password" ? v.password || null : null,
       keyPassphrase:
-        v.mode === "sftp" && v.authType === "privateKey" && v.keyPassphrase
+        asSftp && v.authType === "privateKey" && v.keyPassphrase
           ? v.keyPassphrase
           : null,
     };
@@ -357,14 +423,14 @@ function ProfileFormDialogInner({ open, onOpenChange, profile }: Props) {
     // Per-mode minimum: must have enough to attempt a connection. Skip
     // the full zod validation so the user can test even with a blank
     // name / map field.
-    if (values.mode === "sftp") {
+    if (values.host?.trim()) {
       const gate = sftpConnectGate(values);
       if (!gate.ok) {
         toast.error(gate.reason);
         return;
       }
-    } else if (!draft.local?.rootPath) {
-      toast.error("pick a server root folder to test");
+    } else if (!values.workDir?.trim()) {
+      toast.error("set Local server to test a folder");
       return;
     }
     testConnection.mutate(
@@ -418,344 +484,37 @@ function ProfileFormDialogInner({ open, onOpenChange, profile }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle>
+      <DialogContent className="flex max-h-[90vh] flex-col gap-5 overflow-hidden sm:max-w-5xl">
+        <DialogHeader className="shrink-0">
+          <DialogTitle className="type-section text-base">
             {isEdit ? "Edit server profile" : "New server profile"}
           </DialogTitle>
-          <DialogDescription>
-            Pull-edit-push workspace. Secrets are stored in the OS keychain.
+          <DialogDescription className="type-hint">
+            Two places, one workspace. Set Local to test. Set Remote to push.
+            Secrets stay in the OS keychain.
           </DialogDescription>
         </DialogHeader>
 
         <form
           id="profile-form"
           onSubmit={form.handleSubmit(onSubmit)}
-          className="space-y-4"
+          className="min-h-0 flex-1 space-y-6 overflow-y-auto pr-1"
           noValidate
         >
-          <div className="space-y-1.5">
-            <Label htmlFor="name">Name</Label>
-            <Input
-              id="name"
-              placeholder="My Chernarus server"
-              {...form.register("name")}
-            />
-            {form.formState.errors.name ? (
-              <p className="text-xs text-severity-error">
-                {form.formState.errors.name.message}
-              </p>
-            ) : null}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Connection mode</Label>
-            <Tabs
-              value={mode}
-              onValueChange={(v) =>
-                form.setValue("mode", v as FormValues["mode"], {
-                  shouldValidate: true,
-                })
-              }
-            >
-              <TabsList>
-                <TabsTrigger value="sftp">SFTP (remote)</TabsTrigger>
-                <TabsTrigger value="local">Local folder</TabsTrigger>
-              </TabsList>
-            </Tabs>
-          </div>
-
-          {mode === "sftp" ? (
-            <div className="grid grid-cols-6 gap-3 rounded-md border border-border/60 p-3">
-              <div className="col-span-4 space-y-1.5">
-                <Label htmlFor="host">Host</Label>
-                <Input id="host" placeholder="server.example.com" {...form.register("host")} />
-                {form.formState.errors.host ? (
-                  <p className="text-xs text-severity-error">
-                    {form.formState.errors.host.message}
-                  </p>
-                ) : null}
-              </div>
-              <div className="col-span-2 space-y-1.5">
-                <Label htmlFor="port">Port</Label>
-                <Input id="port" type="number" {...form.register("port")} />
-              </div>
-
-              <div className="col-span-3 space-y-1.5">
-                <Label htmlFor="username">Username</Label>
-                <Input id="username" {...form.register("username")} />
-                {form.formState.errors.username ? (
-                  <p className="text-xs text-severity-error">
-                    {form.formState.errors.username.message}
-                  </p>
-                ) : null}
-              </div>
-              <div className="col-span-3 space-y-1.5">
-                <Label>Auth</Label>
-                <Select
-                  value={authType ?? "password"}
-                  onValueChange={(v) =>
-                    form.setValue("authType", v as NonNullable<FormValues["authType"]>)
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="password">Password</SelectItem>
-                    <SelectItem value="privateKey">Private key</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {authType === "password" ? (
-                <div className="col-span-6 space-y-1.5">
-                  <Label htmlFor="password">
-                    Password
-                    {isEdit ? (
-                      <span className="ml-1 text-xs text-muted-foreground">
-                        (leave blank to keep existing)
-                      </span>
-                    ) : null}
-                  </Label>
-                  <Input id="password" type="password" {...form.register("password")} />
-                </div>
-              ) : (
-                <>
-                  <div className="col-span-6 space-y-1.5">
-                    <Label htmlFor="privateKeyPath">Private key path</Label>
-                    <div className="flex gap-2">
-                      <Input id="privateKeyPath" {...form.register("privateKeyPath")} />
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="icon"
-                        onClick={pickKeyPath}
-                      >
-                        <FolderOpen className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    {form.formState.errors.privateKeyPath ? (
-                      <p className="text-xs text-severity-error">
-                        {form.formState.errors.privateKeyPath.message}
-                      </p>
-                    ) : null}
-                  </div>
-                  <div className="col-span-6 space-y-1.5">
-                    <Label htmlFor="keyPassphrase">
-                      Key passphrase{" "}
-                      <span className="text-xs text-muted-foreground">
-                        (optional; leave blank to keep existing)
-                      </span>
-                    </Label>
-                    <Input
-                      id="keyPassphrase"
-                      type="password"
-                      {...form.register("keyPassphrase")}
-                    />
-                  </div>
-                </>
-              )}
-
-              <div className="col-span-6 space-y-1.5">
-                <Label htmlFor="remoteRoot">
-                  Server root path{" "}
-                  <span className="text-xs text-muted-foreground">
-                    (optional)
-                  </span>
-                </Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="remoteRoot"
-                    placeholder="/opt/dayz  or  /home/gameserver/dayz-server"
-                    {...form.register("remoteRoot")}
-                  />
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="icon"
-                    onClick={() => setBrowsePurpose("serverRoot")}
-                    title="Browse remote filesystem"
-                    disabled={!canBrowse(form.getValues())}
-                  >
-                    <FolderSearch className="h-4 w-4" />
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Fill this in when the DayZ install doesn't sit
-                  directly under the SSH login user's home. Mission
-                  and profiles paths below are resolved against this
-                  root. Leave blank if your paths are already
-                  home-relative or absolute (start with{" "}
-                  <code>/</code>). Click the folder icon to browse the
-                  server.
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-3 rounded-md border border-border/60 p-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="rootPath">Server root folder</Label>
-                <div className="flex gap-2">
-                  <Input
-                    id="rootPath"
-                    placeholder="C:\\path\\to\\server-root"
-                    {...form.register("rootPath")}
-                  />
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="icon"
-                    onClick={pickRootPath}
-                    title="Pick folder"
-                  >
-                    <FolderOpen className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => void runScan()}
-                    disabled={!rootPath?.trim() || scanning}
-                    title="Re-scan for missions + profiles"
-                  >
-                    <RefreshCw
-                      className={`h-4 w-4 ${scanning ? "animate-spin" : ""}`}
-                    />
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Point at the DayZ server install root (the folder
-                  that contains <code>serverDZ.cfg</code>,{" "}
-                  <code>mpmissions/</code>, and one or more profile
-                  directories). We scan automatically and offer
-                  dropdowns for mission + profile below.
-                </p>
-                {form.formState.errors.rootPath ? (
-                  <p className="text-xs text-severity-error">
-                    {form.formState.errors.rootPath.message}
-                  </p>
-                ) : null}
-              </div>
-
-              {scan && scan.rootExists ? (
-                <ScanSummary
-                  scan={scan}
-                  manual={manualPaths}
-                  onToggleManual={() => setManualPaths((m) => !m)}
-                />
-              ) : scan && !scan.rootExists ? (
-                <p className="text-xs text-severity-error">
-                  Path doesn't exist on disk.
-                </p>
-              ) : null}
-
-              {showManualInputs ? (
-                <RelativePathInputs form={form} />
-              ) : scan ? (
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label>Mission folder</Label>
-                    <Select
-                      value={mpmissionsRelative}
-                      onValueChange={(v) => {
-                        form.setValue("mpmissionsRelative", v, {
-                          shouldValidate: true,
-                        });
-                        const pick = scan.missions.find(
-                          (m) => m.relativePath === v,
-                        );
-                        if (
-                          pick?.mapHint &&
-                          pick.mapHint !== form.getValues("map")
-                        ) {
-                          form.setValue("map", pick.mapHint, {
-                            shouldValidate: true,
-                          });
-                        }
-                      }}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Pick a mission" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {scan.missions.length === 0 ? (
-                          <SelectItem value="__none__" disabled>
-                            None detected — tick "Type manually"
-                          </SelectItem>
-                        ) : (
-                          scan.missions.map((m) => (
-                            <SelectItem
-                              key={m.relativePath}
-                              value={m.relativePath}
-                            >
-                              {m.relativePath}
-                              {m.mapHint ? ` · ${m.mapHint}` : ""}
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label>Profiles folder</Label>
-                    <Select
-                      value={profilesRelative}
-                      onValueChange={(v) =>
-                        form.setValue("profilesRelative", v, {
-                          shouldValidate: true,
-                        })
-                      }
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Pick a profile folder" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {scan.profileFolders.length === 0 ? (
-                          <SelectItem value="__none__" disabled>
-                            None detected — tick "Type manually"
-                          </SelectItem>
-                        ) : (
-                          scan.profileFolders.map((p) => (
-                            <SelectItem
-                              key={p.relativePath}
-                              value={p.relativePath}
-                            >
-                              {p.relativePath}
-                              {p.markers.length > 0
-                                ? ` · ${p.markers.join(", ")}`
-                                : ""}
-                            </SelectItem>
-                          ))
-                        )}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          )}
-
-          {mode === "sftp" ? (
-            <div className="space-y-2 rounded-md border border-border/60 p-3">
-              <RelativePathInputs
-                form={form}
-                onBrowseMissions={() => setBrowsePurpose("missions")}
-                onBrowseProfiles={() => setBrowsePurpose("profiles")}
-                browseDisabled={!canBrowse(form.getValues())}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="name">Name</Label>
+              <Input
+                id="name"
+                placeholder="My Chernarus server"
+                {...form.register("name")}
               />
-              <p className="text-xs text-muted-foreground">
-                Click the folder icon next to each field to browse
-                the server. Enter absolute paths (starting with{" "}
-                <code>/</code>), paths relative to the server root
-                above, or relative to the SSH login user's home.
-              </p>
+              {form.formState.errors.name ? (
+                <p className="text-xs text-severity-error">
+                  {form.formState.errors.name.message}
+                </p>
+              ) : null}
             </div>
-          ) : null}
-
-          <Separator />
-
-          <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <Label>Map</Label>
               <Select
@@ -780,12 +539,7 @@ function ProfileFormDialogInner({ open, onOpenChange, profile }: Props) {
                   <Input id="customMapId" {...form.register("customMapId")} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="customMapSizeM">
-                    Map size (m){" "}
-                    <span className="text-xs text-muted-foreground">
-                      (optional)
-                    </span>
-                  </Label>
+                  <Label htmlFor="customMapSizeM">Map size (m)</Label>
                   <Input
                     id="customMapSizeM"
                     type="number"
@@ -794,56 +548,371 @@ function ProfileFormDialogInner({ open, onOpenChange, profile }: Props) {
                     placeholder="15360"
                     {...form.register("customMapSizeM")}
                   />
-                  <p className="text-[10px] text-muted-foreground">
-                    World-metre extent of your custom terrain. Defaults
-                    to Chernarus (15360) when blank — set this so the
-                    map canvas, grid, and clamp match your actual
-                    playfield.
+                  <p className="type-hint">
+                    World metres. Blank uses Chernarus (15360).
                   </p>
                 </div>
               </>
             ) : null}
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="workDir">
-              Working directory{" "}
-              <span className="text-xs text-muted-foreground">
-                (optional)
-              </span>
-            </Label>
-            <div className="flex gap-2">
-              <Input
-                id="workDir"
-                placeholder="e.g. D:\\DayZ\\my-server"
-                {...form.register("workDir")}
-              />
-              <Button
-                type="button"
-                variant="secondary"
-                size="icon"
-                onClick={pickWorkDir}
-                title="Pick folder"
-              >
-                <FolderOpen className="h-4 w-4" />
-              </Button>
-            </div>
-            <p className="text-[10px] text-muted-foreground">
-              Where this profile writes build outputs — modpack PBOs,
-              CE-zone override PBOs, extracted files. Absolute path.
-              Leave blank to use the app's data directory.
-            </p>
-            {form.formState.errors.workDir ? (
-              <p className="text-xs text-severity-error">
-                {form.formState.errors.workDir.message}
-              </p>
-            ) : null}
+          <div className="grid items-stretch gap-4 lg:grid-cols-[1fr_auto_1fr]">
+            <PlacePanel
+              icon={HardDrive}
+              title="Local server"
+              hint="Dedicated folder on this PC. Needed for Sync to local."
+            >
+              <div className="space-y-1.5">
+                <Label htmlFor="workDir">Folder</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="workDir"
+                    placeholder="C:\\path\\to\\dedicated-server"
+                    {...form.register("workDir")}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="icon"
+                    onClick={pickWorkDir}
+                    title="Pick folder"
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => void runScan()}
+                    disabled={!workDir?.trim() || scanning}
+                    title="Re-scan for missions + profiles"
+                  >
+                    <RefreshCw
+                      className={`h-4 w-4 ${scanning ? "animate-spin" : ""}`}
+                    />
+                  </Button>
+                </div>
+                <p className="type-hint">
+                  The folder with serverDZ.cfg and mpmissions. Not the workspace.
+                </p>
+                {form.formState.errors.workDir ? (
+                  <p className="text-xs text-severity-error">
+                    {form.formState.errors.workDir.message}
+                  </p>
+                ) : null}
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="localProfilesRelative">Profiles folder</Label>
+                <Input
+                  id="localProfilesRelative"
+                  placeholder="instances"
+                  {...form.register("localProfilesRelative", {
+                    setValueAs: (v: string) => folderName(v) || v,
+                  })}
+                />
+                <p className="type-hint">
+                  Folder name on this PC. Often instances.
+                </p>
+                {scan?.profileFolders.length ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {scan.profileFolders.map((f) => {
+                      const name = folderName(f.relativePath);
+                      return (
+                        <button
+                          key={name}
+                          type="button"
+                          className="type-mono rounded-md border border-border px-2 py-1 hover:border-foreground/30 hover:text-foreground"
+                          onClick={() =>
+                            form.setValue("localProfilesRelative", name, {
+                              shouldValidate: true,
+                            })
+                          }
+                        >
+                          {name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+
+              {scan && scan.rootExists ? (
+                <ScanSummary
+                  scan={scan}
+                  manual={manualPaths}
+                  onToggleManual={() => setManualPaths((m) => !m)}
+                />
+              ) : scan && !scan.rootExists ? (
+                <p className="text-xs text-severity-error">
+                  Path doesn't exist on disk.
+                </p>
+              ) : null}
+            </PlacePanel>
+
+            <PlaceConnector
+              localName={localProfilesRelative || "profiles"}
+              remoteName={profilesRelative || "profiles"}
+            />
+
+            <PlacePanel
+              icon={Server}
+              title="Remote"
+              hint="SFTP. Needed for Push to Remote."
+            >
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2 space-y-1.5">
+                  <Label htmlFor="host">Host</Label>
+                  <Input
+                    id="host"
+                    placeholder="server.example.com"
+                    {...form.register("host")}
+                  />
+                  {form.formState.errors.host ? (
+                    <p className="text-xs text-severity-error">
+                      {form.formState.errors.host.message}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="port">Port</Label>
+                  <Input id="port" type="number" {...form.register("port")} />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="username">Username</Label>
+                  <Input id="username" {...form.register("username")} />
+                  {form.formState.errors.username ? (
+                    <p className="text-xs text-severity-error">
+                      {form.formState.errors.username.message}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Auth</Label>
+                  <Select
+                    value={authType ?? "password"}
+                    onValueChange={(v) =>
+                      form.setValue("authType", v as NonNullable<FormValues["authType"]>)
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="password">Password</SelectItem>
+                      <SelectItem value="privateKey">Private key</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              {authType === "password" ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="password">
+                    Password
+                    {isEdit ? (
+                      <span className="type-hint font-normal">
+                        leave blank to keep
+                      </span>
+                    ) : null}
+                  </Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    {...form.register("password")}
+                  />
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="privateKeyPath">Private key</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="privateKeyPath"
+                        {...form.register("privateKeyPath")}
+                      />
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="icon"
+                        onClick={pickKeyPath}
+                      >
+                        <FolderOpen className="h-4 w-4" />
+                      </Button>
+                    </div>
+                    {form.formState.errors.privateKeyPath ? (
+                      <p className="text-xs text-severity-error">
+                        {form.formState.errors.privateKeyPath.message}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="keyPassphrase">
+                      Key passphrase
+                      <span className="type-hint font-normal">optional</span>
+                    </Label>
+                    <Input
+                      id="keyPassphrase"
+                      type="password"
+                      {...form.register("keyPassphrase")}
+                    />
+                  </div>
+                </>
+              )}
+
+              <div className="space-y-1.5">
+                <Label htmlFor="remoteRoot">Server root</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="remoteRoot"
+                    placeholder="/opt/dayz"
+                    {...form.register("remoteRoot")}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="icon"
+                    onClick={() => setBrowsePurpose("serverRoot")}
+                    title="Browse remote filesystem"
+                    disabled={!canBrowse(form.getValues())}
+                  >
+                    <FolderSearch className="h-4 w-4" />
+                  </Button>
+                </div>
+                <p className="type-hint">
+                  Optional. DayZ install if it is not the SSH home.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="profilesRelative">Profiles folder</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="profilesRelative"
+                    placeholder="profiles"
+                    {...form.register("profilesRelative", {
+                      setValueAs: (v: string) => folderName(v) || v,
+                    })}
+                  />
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={!remoteReady || loadingRemoteFolders}
+                    onClick={() => void loadRemoteProfileFolders()}
+                    title={
+                      remoteReady
+                        ? "List folders on the SFTP server"
+                        : "Fill host, username, and auth first"
+                    }
+                  >
+                    {loadingRemoteFolders ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-4 w-4" />
+                    )}
+                    Load folders
+                  </Button>
+                </div>
+                {remoteReady ? (
+                  <p className="type-hint">
+                    Folder name only. Load folders lists the server root.
+                  </p>
+                ) : (
+                  <p className="type-hint">
+                    Disabled until host, username, and auth are set.
+                  </p>
+                )}
+                {remoteFolders?.length ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {remoteFolders.map((name) => (
+                      <button
+                        key={name}
+                        type="button"
+                        className="type-mono rounded-md border border-border px-2 py-1 hover:border-foreground/30 hover:text-foreground"
+                        onClick={() =>
+                          form.setValue("profilesRelative", name, {
+                            shouldValidate: true,
+                          })
+                        }
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </PlacePanel>
           </div>
+
+          <section className="space-y-3 rounded-md border border-border bg-card p-5">
+            <div className="space-y-1">
+              <h3 className="type-section">Mission</h3>
+              <p className="type-hint">
+                Same relative path on Local, Remote, and the workspace.
+              </p>
+            </div>
+            {scan && scan.rootExists && !manualPaths ? (
+              <div className="space-y-1.5">
+                <Label>Mission folder</Label>
+                <Select
+                  value={mpmissionsRelative}
+                  onValueChange={(v) => {
+                    form.setValue("mpmissionsRelative", v, {
+                      shouldValidate: true,
+                    });
+                    const pick = scan.missions.find(
+                      (m) => m.relativePath === v,
+                    );
+                    if (
+                      pick?.mapHint &&
+                      pick.mapHint !== form.getValues("map")
+                    ) {
+                      form.setValue("map", pick.mapHint, {
+                        shouldValidate: true,
+                      });
+                    }
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Pick a mission" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {scan.missions.length === 0 ? (
+                      <SelectItem value="__none__" disabled>
+                        None detected. Use Type manually.
+                      </SelectItem>
+                    ) : (
+                      scan.missions.map((m) => (
+                        <SelectItem
+                          key={m.relativePath}
+                          value={m.relativePath}
+                        >
+                          {m.relativePath}
+                          {m.mapHint ? ` · ${m.mapHint}` : ""}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              <RelativePathInputs
+                form={form}
+                onBrowseMissions={
+                  hasRemote ? () => setBrowsePurpose("missions") : undefined
+                }
+                browseDisabled={!canBrowse(form.getValues())}
+              />
+            )}
+          </section>
         </form>
 
         {testResult ? <TestResultBanner result={testResult} /> : null}
 
-        <DialogFooter className="sm:justify-between">
+        <DialogFooter className="shrink-0 sm:justify-between">
           <Button
             type="button"
             variant="secondary"
@@ -907,86 +976,175 @@ function ProfileFormDialogInner({ open, onOpenChange, profile }: Props) {
   );
 }
 
+function sameFolderName(a: string, b: string): boolean {
+  const n = (s: string) =>
+    s.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "").toLowerCase();
+  return n(a) === n(b);
+}
+
+function localProfilesAlias(
+  canon: string,
+  local?: string,
+): string | null {
+  const t = (local ?? "").trim();
+  if (!t || sameFolderName(t, canon)) return null;
+  return t;
+}
+
+function PlacePanel({
+  icon: Icon,
+  title,
+  hint,
+  children,
+}: {
+  icon: ComponentType<{ className?: string }>;
+  title: string;
+  hint: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="flex min-w-0 flex-col gap-4 rounded-md border border-border bg-card p-5">
+      <header className="space-y-1">
+        <div className="flex items-center gap-2">
+          <Icon className="h-4 w-4 text-muted-foreground" />
+          <h3 className="type-section">{title}</h3>
+        </div>
+        <p className="type-hint">{hint}</p>
+      </header>
+      <div className="flex flex-1 flex-col gap-4">{children}</div>
+    </section>
+  );
+}
+
+function PlaceConnector({
+  localName,
+  remoteName,
+}: {
+  localName: string;
+  remoteName: string;
+}) {
+  const differ = !sameFolderName(localName, remoteName);
+  return (
+    <div
+      className="flex items-center gap-3 py-1 lg:flex-col lg:justify-center lg:gap-2 lg:px-1 lg:py-0"
+      aria-hidden
+    >
+      <div className="h-px flex-1 bg-border lg:h-16 lg:w-px lg:flex-none" />
+      <div className="flex flex-col items-center gap-1.5">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border bg-background">
+          <ArrowLeftRight className="h-3.5 w-3.5 text-muted-foreground" />
+        </div>
+        {differ ? (
+          <p className="type-mono max-w-24 text-center">
+            {localName} / {remoteName}
+          </p>
+        ) : null}
+      </div>
+      <div className="h-px flex-1 bg-border lg:h-16 lg:w-px lg:flex-none" />
+    </div>
+  );
+}
+
 function RelativePathInputs({
   form,
   onBrowseMissions,
-  onBrowseProfiles,
   browseDisabled,
 }: {
   form: UseFormReturn<FormValues>;
   onBrowseMissions?: () => void;
-  onBrowseProfiles?: () => void;
   browseDisabled?: boolean;
 }) {
   return (
-    <div className="grid grid-cols-2 gap-3">
-      <div className="space-y-1.5">
-        <Label htmlFor="mpmissionsRelative">Mission folder (relative)</Label>
-        <div className="flex gap-2">
-          <Input
-            id="mpmissionsRelative"
-            placeholder="mpmissions/dayzOffline.chernarusplus"
-            {...form.register("mpmissionsRelative")}
-          />
-          {onBrowseMissions ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="icon"
-              onClick={onBrowseMissions}
-              disabled={browseDisabled}
-              title="Browse remote"
-            >
-              <FolderSearch className="h-4 w-4" />
-            </Button>
-          ) : null}
-        </div>
-      </div>
-      <div className="space-y-1.5">
-        <Label htmlFor="profilesRelative">Profiles folder (relative)</Label>
-        <div className="flex gap-2">
-          <Input
-            id="profilesRelative"
-            placeholder="profiles"
-            {...form.register("profilesRelative")}
-          />
-          {onBrowseProfiles ? (
-            <Button
-              type="button"
-              variant="secondary"
-              size="icon"
-              onClick={onBrowseProfiles}
-              disabled={browseDisabled}
-              title="Browse remote"
-            >
-              <FolderSearch className="h-4 w-4" />
-            </Button>
-          ) : null}
-        </div>
+    <div className="space-y-1.5">
+      <Label htmlFor="mpmissionsRelative">Mission folder (relative)</Label>
+      <div className="flex gap-2">
+        <Input
+          id="mpmissionsRelative"
+          placeholder="mpmissions/dayzOffline.chernarusplus"
+          {...form.register("mpmissionsRelative")}
+        />
+        {onBrowseMissions ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="icon"
+            onClick={onBrowseMissions}
+            disabled={browseDisabled}
+            title="Browse remote"
+          >
+            <FolderSearch className="h-4 w-4" />
+          </Button>
+        ) : null}
       </div>
     </div>
   );
 }
 
-type BrowsePurpose = "serverRoot" | "missions" | "profiles";
+type BrowsePurpose = "serverRoot" | "missions";
 
 const BROWSE_PURPOSE_TO_FIELD: Record<
   BrowsePurpose,
-  "remoteRoot" | "mpmissionsRelative" | "profilesRelative"
+  "remoteRoot" | "mpmissionsRelative"
 > = {
   serverRoot: "remoteRoot",
   missions: "mpmissionsRelative",
-  profiles: "profilesRelative",
 };
+
+function folderName(path: string | undefined): string {
+  const n = (path ?? "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (!n) return "";
+  return n.split("/").pop() ?? n;
+}
+
+const SKIP_REMOTE_DIRS = new Set([
+  "mpmissions",
+  "keys",
+  "addons",
+  "battleye",
+  "bliss",
+  "dta",
+  "db",
+  "mods",
+  ".git",
+  ".dzmgr",
+]);
+
+const LIKELY_PROFILE_NAMES = new Set(["profiles", "profile", "instances"]);
+
+function remoteProfileNames(
+  entries: { name: string; isDir: boolean }[],
+): string[] {
+  const names = entries
+    .filter((e) => e.isDir)
+    .map((e) => folderName(e.name))
+    .filter((n) => {
+      if (!n || n.startsWith(".") || n.startsWith("@")) return false;
+      return !SKIP_REMOTE_DIRS.has(n.toLowerCase());
+    });
+  const likely = names.filter((n) =>
+    LIKELY_PROFILE_NAMES.has(n.toLowerCase()),
+  );
+  const shown = likely.length > 0 ? likely : names;
+  return [...new Set(shown)].sort((a, b) => {
+    const sa = LIKELY_PROFILE_NAMES.has(a.toLowerCase()) ? 1 : 0;
+    const sb = LIKELY_PROFILE_NAMES.has(b.toLowerCase()) ? 1 : 0;
+    return sb - sa || a.localeCompare(b);
+  });
+}
 
 /** Minimum fields required to attempt an SFTP connection — shared by
  *  the Test button's error toasts and the browse/browse-disabled
  *  gate so both paths stay in sync. */
+type SftpGateFields = Pick<
+  FormValues,
+  "host" | "username" | "authType" | "privateKeyPath" | "password"
+>;
+
 function sftpConnectGate(
-  v: FormValues,
+  v: SftpGateFields,
 ): { ok: true } | { ok: false; reason: string } {
-  if (v.mode !== "sftp") {
-    return { ok: false, reason: "SFTP mode required" };
+  if (!v.host?.trim()) {
+    return { ok: false, reason: "host is required to test SFTP" };
   }
   if (!v.host?.trim() || !v.username?.trim()) {
     return { ok: false, reason: "host and username are required to test" };
@@ -997,8 +1155,15 @@ function sftpConnectGate(
   return { ok: true };
 }
 
-function canBrowse(v: FormValues): boolean {
+function canBrowse(v: SftpGateFields): boolean {
   return sftpConnectGate(v).ok;
+}
+
+function canLoadRemote(v: SftpGateFields, isEdit: boolean): boolean {
+  if (!sftpConnectGate(v).ok) return false;
+  if (v.authType === "privateKey") return true;
+  if (v.password?.trim()) return true;
+  return isEdit;
 }
 
 function TestResultBanner({ result }: { result: ConnectionTestResult }) {

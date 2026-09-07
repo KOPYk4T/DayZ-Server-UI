@@ -15,7 +15,6 @@ import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { BackupsPage } from "@/features/backups/BackupsPage";
 import { DashboardPage } from "@/features/dashboard/DashboardPage";
-import { DeployLandingPage } from "@/features/landing/DeployLandingPage";
 import { GettingStartedPage } from "@/features/landing/GettingStartedPage";
 import { SetupPage } from "@/features/setup/SetupPage";
 import { TutorialsPage } from "@/features/tutorials/TutorialsPage";
@@ -94,7 +93,7 @@ function AppRoutes() {
         <Route path="spawn-flow" element={<SpawnFlowPage />} />
         <Route path="mission" element={<MissionLandingPage />} />
         <Route path="server" element={<ServerLandingPage />} />
-        <Route path="deploy" element={<DeployLandingPage />} />
+        <Route path="deploy" element={<Navigate to="sync" replace />} />
         <Route path="sync" element={<SyncPage />} />
         <Route path="backups" element={<BackupsPage />} />
         <Route path="settings" element={<SettingsPage />} />

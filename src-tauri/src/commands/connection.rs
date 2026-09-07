@@ -52,7 +52,7 @@ pub async fn connection_test(
                 });
             }
             let mission = root.join(&profile.paths.mpmissions_relative);
-            let profiles_dir = root.join(&profile.paths.profiles_relative);
+            let profiles_dir = root.join(crate::sync::profiles_on_local(&profile));
             let mut problems = Vec::new();
             if !mission.exists() {
                 problems.push(format!(
@@ -169,7 +169,7 @@ pub async fn connection_test_draft(
                 });
             }
             let mission = root.join(&synthetic.paths.mpmissions_relative);
-            let profiles_dir = root.join(&synthetic.paths.profiles_relative);
+            let profiles_dir = root.join(crate::sync::profiles_on_local(&synthetic));
             let mut problems = Vec::new();
             if !mission.exists() {
                 problems.push(format!("mpmissions not found: {}", mission.display()));

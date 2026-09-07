@@ -5,7 +5,6 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { openPath } from "@tauri-apps/plugin-opener";
 import {
   AlertTriangle,
-  ArrowDownToLine,
   ArrowRight,
   CheckCircle2,
   Circle,
@@ -344,7 +343,7 @@ function StepAction({
   }
 
   if (tier === "workspace" && step.id === "pull") {
-    return <RunPullAction />;
+    return <DeepLinkAction to="/app/sync" label="Open Sync" />;
   }
 
   if (tier === "game_data") {
@@ -392,40 +391,6 @@ function DeepLinkAction({ to, label }: { to: string; label: string }) {
         {label}
         <ArrowRight className="h-3.5 w-3.5" />
       </Link>
-    </Button>
-  );
-}
-
-function RunPullAction() {
-  const qc = useQueryClient();
-  const activeProfile = useProfileStore((s) => s.active);
-  const m = useMutation({
-    mutationFn: () => {
-      if (!activeProfile) throw new Error("no active profile");
-      return tauri.syncPull(activeProfile.id);
-    },
-    onSuccess: () => {
-      toast.success("Pull complete");
-      qc.invalidateQueries({ queryKey: CAPABILITIES_QUERY_KEY });
-      qc.invalidateQueries({ queryKey: ["profiles"] });
-    },
-    onError: (err) => toast.error(errorMessage(err)),
-  });
-  if (!activeProfile) {
-    return null;
-  }
-  return (
-    <Button
-      size="sm"
-      onClick={() => m.mutate()}
-      disabled={m.isPending}
-    >
-      {m.isPending ? (
-        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-      ) : (
-        <ArrowDownToLine className="mr-2 h-3.5 w-3.5" />
-      )}
-      Pull
     </Button>
   );
 }
@@ -672,7 +637,7 @@ function DiscoverModsRow({ step }: { step: CapabilityStep }) {
   const isSftp = activeProfile?.mode === "sftp";
   const isLocal = activeProfile?.mode === "local";
   const detailHint = isSftp
-    ? "SFTP profile: scans the local mod-CE cache populated during your last pull, then registers any types/events/spawnable XMLs into cfgeconomycore.xml. Pull the workspace first if the cache is empty."
+    ? "SFTP profile: scans the local mod-CE cache populated when you last imported the workspace, then registers any types/events/spawnable XMLs into cfgeconomycore.xml. Import the workspace first if the cache is empty."
     : isLocal
       ? "Local profile: scans your server install for `@*` folders, then registers any types/events/spawnable XMLs they ship into cfgeconomycore.xml."
       : "Walk a folder for `@*` mod directories and register the types/events/spawnable XMLs they ship.";

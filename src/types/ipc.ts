@@ -34,6 +34,9 @@ export interface LocalConnection {
 export interface ProfilePaths {
   mpmissionsRelative: string;
   profilesRelative: string;
+  /** Local dedicated folder name when it differs from
+   *  `profilesRelative` (workspace + SFTP). Example: `instances`. */
+  localProfilesRelative?: string | null;
 }
 
 export interface ModRef {
@@ -274,6 +277,34 @@ export interface WorkspaceStatus {
   unpushedCount: number;
   headCommit?: string | null;
   lastPushedCommit?: string | null;
+  localServerPath?: string | null;
+  localServerExists: boolean;
+  hasSftp: boolean;
+  remoteLabel: string;
+}
+
+export type SyncSide = "local" | "remote";
+export type ReviewAction = "write" | "adopt" | "conflict";
+
+export interface ReviewItem {
+  path: string;
+  action: ReviewAction;
+  baseHash?: string | null;
+  destHash?: string | null;
+  workspaceHash?: string | null;
+}
+
+export interface ReviewPlan {
+  write: ReviewItem[];
+  adopt: ReviewItem[];
+  conflicts: ReviewItem[];
+}
+
+export interface FilePreview {
+  path: string;
+  workspaceText?: string | null;
+  destText?: string | null;
+  binary: boolean;
 }
 
 // ---------- Items (types.xml) ----------

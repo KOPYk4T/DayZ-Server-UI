@@ -54,6 +54,36 @@ interface Tutorial {
 
 const TUTORIALS: Tutorial[] = [
   {
+    id: "sync-local-push",
+    icon: Upload,
+    title: "Edit, test local, push remote",
+    summary:
+      "Workspace is the cache. Sync to local copies a reviewed diff to your dedicated server. Push uploads that diff to SFTP.",
+    duration: "4 min",
+    difficulty: "beginner",
+    requires: "A profile with Local server set. SFTP optional for Push.",
+    tags: ["sync", "push", "local", "workspace", "sftp"],
+    steps: [
+      {
+        text: "Set Remote (SFTP) and Local server (your DayZ dedicated folder) on the profile.",
+        goto: { path: "/profiles", label: "Profiles" },
+      },
+      {
+        text: "Open Sync. The first visit imports the workspace from Local server if it is empty.",
+        goto: { path: "/app/sync", label: "Open Sync" },
+      },
+      {
+        text: "Edit types or other mission files in the app. Those writes stay in the workspace.",
+      },
+      {
+        text: "Sync to local — review the file list (and diffs), then confirm. Restart the dedicated server to test.",
+      },
+      {
+        text: "Push to Remote when you are happy. Same review. FileZilla is not required for those files.",
+      },
+    ],
+  },
+  {
     id: "adjust-item",
     icon: Boxes,
     title: "Adjust an item's loot settings",
@@ -101,8 +131,8 @@ const TUTORIALS: Tutorial[] = [
         ),
       },
       {
-        text: "Press Deploy → Push when you're ready to ship changes to the server.",
-        goto: { path: "/app/sync", label: "Deploy / Sync" },
+        text: "Open Sync and Push to Remote when you're ready to ship changes.",
+        goto: { path: "/app/sync", label: "Open Sync" },
       },
     ],
     next: { id: "custom-item-variant", label: "Create a custom item variant" },
@@ -325,8 +355,8 @@ const TUTORIALS: Tutorial[] = [
         goto: { path: "/app/reskin/library", label: "Modpack Overview" },
       },
       {
-        text: "Deploy → Push.",
-        goto: { path: "/app/sync", label: "Deploy / Sync" },
+        text: "Open Sync and Push to Remote.",
+        goto: { path: "/app/sync", label: "Open Sync" },
       },
     ],
     next: {
@@ -454,8 +484,8 @@ const TUTORIALS: Tutorial[] = [
         text: "Enable the Territories layer on the map (sidebar or keyboard 4). Click the ＋ icon next to your new category to drop a starter zone, then drag its centre / edge handles to position + resize. Add as many zones as you want — each is an independent spawn area.",
       },
       {
-        text: "Save in the header, then Deploy → Push. Once the server reloads the mission, your SuperBear will spawn from the territory system with working AI — patrol behaviour, sight-based aggro, proper target pursuit.",
-        goto: { path: "/app/sync", label: "Deploy / Sync" },
+        text: "Save in the header, then Sync to local to test, and Push to Remote when ready. Once the server reloads the mission, your SuperBear will spawn from the territory system with working AI — patrol behaviour, sight-based aggro, proper target pursuit.",
+        goto: { path: "/app/sync", label: "Open Sync" },
       },
       {
         text: (
@@ -634,35 +664,30 @@ const TUTORIALS: Tutorial[] = [
   {
     id: "pull-edit-push",
     icon: Upload,
-    title: "Pull → edit → push workflow",
+    title: "Edit → Sync to local → Push",
     summary:
-      "The bread-and-butter loop — the app always edits a local copy of your mission, then syncs changes back to the server.",
+      "You always edit the workspace cache. Sync to local copies a reviewed diff to the dedicated folder. Push uploads that diff to SFTP.",
     duration: "~3 min",
     difficulty: "beginner",
-    requires: "configured server profile (local folder or SFTP)",
-    tags: ["pull", "push", "sync", "deploy", "workflow"],
+    requires: "A profile with Local server set. SFTP optional for Push.",
+    tags: ["pull", "push", "sync", "deploy", "workflow", "local"],
     steps: [
       {
         text: "Make sure you have a profile selected (top of sidebar).",
       },
       {
-        text: "Deploy → Pull. Copies the server's mpmissions + profiles trees into your local workspace, stamps a git commit.",
-        goto: { path: "/app/sync", label: "Deploy / Pull" },
+        text: "Open Sync. First visit imports the workspace from Local server if it is empty.",
+        goto: { path: "/app/sync", label: "Open Sync" },
       },
       {
-        text: "Do whatever editing you need — Items, Events, Map, Modpack — all changes land in the local workspace's files.",
+        text: "Do whatever editing you need — Items, Events, Map, Modpack — all changes land in the workspace.",
       },
       {
-        text: (
-          <>
-            Deploy → Diff. Shows every file that changed since the last
-            pull + <code>.bisign</code>-style classification (added /
-            modified / deleted).
-          </>
-        ),
+        text: "Sync to local. Review Write / Adopt / Conflict, then confirm. Restart the dedicated server to test.",
+        goto: { path: "/app/sync", label: "Open Sync" },
       },
       {
-        text: "Deploy → Push. Uploads the diff. For local-mode profiles, a snapshot of the destination files is saved to History & Backups first.",
+        text: "Push to Remote when you are happy. Same review. A pre-push backup is saved under History & Backups for local writes.",
       },
     ],
   },
@@ -887,18 +912,16 @@ function TutorialCard({
         ) : (
           <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
         )}
-        <Icon className="h-5 w-5 shrink-0 text-primary" />
+        <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-semibold">{tutorial.title}</span>
+            <span className="type-section">{tutorial.title}</span>
             <DifficultyBadge level={tutorial.difficulty} />
             <Badge variant="outline" className="text-[10px]">
               {tutorial.duration}
             </Badge>
           </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {tutorial.summary}
-          </p>
+          <p className="type-hint mt-1">{tutorial.summary}</p>
         </div>
       </button>
       {expanded ? (
@@ -934,12 +957,10 @@ function TutorialCard({
           </ol>
           {tutorial.next ? (
             <div className="flex items-center gap-2 rounded-md border border-border/60 bg-muted/20 px-3 py-2 text-[11px]">
-              <ArrowRight className="h-3.5 w-3.5 text-primary" />
-              <span className="text-muted-foreground">
-                Next, try:
-              </span>
+              <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="type-hint">Next, try:</span>
               <button
-                className="font-semibold text-primary hover:underline"
+                className="type-section underline-offset-2 hover:underline"
                 onClick={() => onJumpTo(tutorial.next!.id)}
               >
                 {tutorial.next.label}

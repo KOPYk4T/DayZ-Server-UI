@@ -25,13 +25,19 @@ pub struct Snapshot {
 }
 
 pub fn capture(workspace: &Path, rels: &[PathBuf], git_commit: String) -> AppResult<Snapshot> {
+    capture_under(workspace, rels, git_commit)
+}
+
+/// Hash the same relative trees under an arbitrary root (workspace,
+/// local server, or a temp fetch). Keys stay workspace-relative.
+pub fn capture_under(root: &Path, rels: &[PathBuf], git_commit: String) -> AppResult<Snapshot> {
     let mut files = BTreeMap::new();
     for rel in rels {
-        let root = workspace.join(rel);
-        if !root.exists() {
+        let dir = root.join(rel);
+        if !dir.exists() {
             continue;
         }
-        walk(workspace, &root, &mut files)?;
+        walk(root, &dir, &mut files)?;
     }
     Ok(Snapshot {
         captured_at: Utc::now(),

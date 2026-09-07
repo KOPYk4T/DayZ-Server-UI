@@ -17,6 +17,9 @@ import type {
   CeImportEntry,
   ConnectionTestResult,
   DiffSummary,
+  FilePreview,
+  ReviewPlan,
+  SyncSide,
   DynamicEvent,
   EventPayload,
   EventSpawnGroup,
@@ -167,6 +170,43 @@ export function syncDiffAgainstRemote(id: string): Promise<DiffSummary> {
 
 export function syncLocalDiff(id: string): Promise<DiffSummary> {
   return invoke("sync_local_diff", { id });
+}
+
+export function syncProbe(id: string, side: SyncSide): Promise<ReviewPlan> {
+  return invoke("sync_probe", { id, side });
+}
+
+export function syncWrite(
+  id: string,
+  side: SyncSide,
+  paths: string[],
+  adoptPaths: string[],
+): Promise<PushResult> {
+  return invoke("sync_write", { id, side, paths, adoptPaths });
+}
+
+export function syncFetch(
+  id: string,
+  side: SyncSide,
+  adoptPaths: string[],
+): Promise<number> {
+  return invoke("sync_fetch", { id, side, adoptPaths });
+}
+
+export function syncReset(id: string, side: SyncSide): Promise<PullResult> {
+  return invoke("sync_reset", { id, side });
+}
+
+export function syncBootstrap(id: string): Promise<PullResult | null> {
+  return invoke("sync_bootstrap", { id });
+}
+
+export function syncFilePreview(
+  id: string,
+  side: SyncSide,
+  path: string,
+): Promise<FilePreview> {
+  return invoke("sync_file_preview", { id, side, path });
 }
 
 // ---------- Items (types.xml) ----------

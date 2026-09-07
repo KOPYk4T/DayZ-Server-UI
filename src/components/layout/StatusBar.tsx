@@ -70,7 +70,7 @@ export function StatusBar() {
       {active ? (
         <>
           <span>
-            pulled{" "}
+            imported{" "}
             <strong className="text-foreground">
               {formatRelativeTime(status?.lastPullAt ?? active.lastPullAt)}
             </strong>

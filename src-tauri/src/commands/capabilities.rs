@@ -203,13 +203,13 @@ fn build_connection_tier(
             id: "connection_check".into(),
             label: "Check connection".into(),
             state: TierState::Ready,
-            detail: "Verified — at least one successful pull on record.".into(),
+            detail: "Verified — workspace imported at least once.".into(),
         },
         Some(_) => CapabilityStep {
             id: "connection_check".into(),
             label: "Check connection".into(),
             state: TierState::Todo,
-            detail: "Run a connection test from the profile editor, or pull mission files to verify.".into(),
+            detail: "Run a connection test from the profile editor, or import the workspace from Sync.".into(),
         },
         None => CapabilityStep {
             id: "connection_check".into(),
@@ -220,9 +220,8 @@ fn build_connection_tier(
     };
 
     // Order: profile → connection check.
-    // The "Working directory" step lives under "Build tools"; it
-    // only matters when packing a server modpack / reskin, not for
-    // the basic edit-and-pull flow this tier gates.
+    // Local server lives under game data; it is optional for
+    // Sync to local. This Connection tier only needs a profile.
     steps.push(profile_step.clone());
     steps.push(connection_check_step);
 
@@ -256,11 +255,11 @@ fn build_workspace_tier(
             tier: CapabilityTier::Workspace,
             state: TierState::Blocked,
             title: "Workspace".into(),
-            description: "Mission files pulled at least once.".into(),
+            description: "Workspace imported at least once.".into(),
             unlocks: editor_routes_under_mission_world(),
             steps: vec![CapabilityStep {
                 id: "pull".into(),
-                label: "Pull from server".into(),
+                label: "Import workspace".into(),
                 state: TierState::Blocked,
                 detail: "Set up a profile first.".into(),
             }],
@@ -282,13 +281,13 @@ fn build_workspace_tier(
         }
     };
     let pull_detail = match last_pull {
-        Some(t) => format!("Last pulled {}", relative_time(t)),
-        None => "Never pulled.".into(),
+        Some(t) => format!("Last imported {}", relative_time(t)),
+        None => "Workspace not imported yet.".into(),
     };
 
     let steps = vec![CapabilityStep {
         id: "pull".into(),
-        label: "Pull mission files".into(),
+        label: "Import workspace".into(),
         state: pull_state,
         detail: pull_detail,
     }];
@@ -297,7 +296,7 @@ fn build_workspace_tier(
         tier: CapabilityTier::Workspace,
         state: pull_state,
         title: "Create workspace".into(),
-        description: "Pull the server files needed for the base functionality of the editor — items, events, loadouts, and so on. Pulling at least once creates a local workspace and unlocks the editor.".into(),
+        description: "Import mpmissions, profiles, and serverDZ.cfg into the workspace (app data). First visit to Sync does this from Local server when that folder is set. Unlocks the editors.".into(),
         unlocks: editor_routes_under_mission_world(),
         steps,
     }
@@ -411,21 +410,21 @@ fn build_game_data_tier(
     let work_dir_step = match profile {
         Some(p) if p.work_dir.is_some() => CapabilityStep {
             id: "work_dir".into(),
-            label: "Working directory (optional)".into(),
+            label: "Local server (optional)".into(),
             state: TierState::Ready,
             detail: p.work_dir.clone().unwrap_or_default(),
         },
         Some(_) => CapabilityStep {
             id: "work_dir".into(),
-            label: "Working directory (optional)".into(),
+            label: "Local server (optional)".into(),
             state: TierState::Todo,
             detail:
-                "Builds land in app data by default. Set a folder if you want them in your server tree instead."
+                "Set the dedicated server folder to Sync to local and test in-game."
                     .into(),
         },
         None => CapabilityStep {
             id: "work_dir".into(),
-            label: "Working directory (optional)".into(),
+            label: "Local server (optional)".into(),
             state: TierState::Blocked,
             detail: "Pick a profile first.".into(),
         },
@@ -599,19 +598,19 @@ fn build_mods_tier(
                     id: "discover_mods".into(),
                     label: "Discover mods".into(),
                     state: TierState::Blocked,
-                    detail: "Pull the workspace first.".into(),
+                    detail: "Import the workspace first.".into(),
                 },
                 CapabilityStep {
                     id: "import_mod_xml".into(),
                     label: "Import mod XML".into(),
                     state: TierState::Blocked,
-                    detail: "Pull the workspace first.".into(),
+                    detail: "Import the workspace first.".into(),
                 },
                 CapabilityStep {
                     id: "scan_autoimport".into(),
                     label: "Scan & auto-import mod XML".into(),
                     state: TierState::Blocked,
-                    detail: "Pull the workspace first.".into(),
+                    detail: "Import the workspace first.".into(),
                 },
             ],
         };

@@ -48,42 +48,26 @@ export function PageHeader({
   return (
     <header
       className={cn(
-        // `bg-card` is a hair lighter than the body, so the strip reads
-        // as its own horizontal band. Added drop shadow + visible border
-        // both signal "this is sticky" vs the scrolling body below.
-        "relative z-10 flex flex-wrap items-start justify-between gap-3",
-        "border-b border-border bg-card px-6 py-3 shadow-sticky",
+        "relative z-10 flex flex-wrap items-start justify-between gap-4",
+        "border-b border-border bg-card px-6 py-5 shadow-sticky",
         className,
       )}
     >
-      {/* Thin rust accent bar on the left edge — the brandbook's
-          section-header cue. Pure decoration but it anchors the strip. */}
-      <div
-        aria-hidden
-        className="absolute inset-y-0 left-0 w-[3px] bg-brand-rust/80"
-      />
       <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <Icon className="h-5 w-5 shrink-0 text-primary" />
-          <h1 className="font-display truncate text-xl font-semibold tracking-[0.04em] text-foreground">
-            {title}
-          </h1>
+        <div className="flex min-w-0 flex-wrap items-center gap-2.5">
+          <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+          <h1 className="type-page truncate">{title}</h1>
           {badges ? (
             <div className="flex items-center gap-1">{badges}</div>
           ) : null}
           {path ? (
-            <code
-              className="hidden max-w-[28rem] truncate font-mono text-[10px] text-brand-olive-mid md:inline"
-              title={path}
-            >
+            <code className="type-mono hidden max-w-[28rem] truncate md:inline" title={path}>
               {path}
             </code>
           ) : null}
         </div>
         {description ? (
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {description}
-          </p>
+          <p className="type-hint mt-2 max-w-[65ch]">{description}</p>
         ) : null}
       </div>
       {actions ? (

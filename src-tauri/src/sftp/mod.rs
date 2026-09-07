@@ -895,6 +895,142 @@ pub async fn push_diff(
     Ok((uploaded, deleted, total_bytes))
 }
 
+/// Hash a set of workspace-relative files on the remote. Missing
+/// paths are omitted (not an error).
+pub async fn hash_remote_files(
+    profile: &ServerProfile,
+    rels: &[String],
+    password: Option<String>,
+    key_passphrase: Option<String>,
+) -> AppResult<std::collections::BTreeMap<String, crate::sync::snapshot::FileSnapshot>> {
+    use sha2::{Digest, Sha256};
+    let (handle, fingerprint) =
+        client::connect(profile, password, key_passphrase).await?;
+    client::verify_fingerprint_strict(profile, &fingerprint)?;
+    let sftp = client::open_sftp(&handle).await?;
+    let mut out = std::collections::BTreeMap::new();
+    for rel in rels {
+        let remote = client::resolve_remote_str(profile, rel);
+        let mut file = match sftp.open(&remote).await {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+        let mut buf = Vec::new();
+        if file.read_to_end(&mut buf).await.is_err() {
+            continue;
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(&buf);
+        out.insert(
+            rel.clone(),
+            crate::sync::snapshot::FileSnapshot {
+                size: buf.len() as u64,
+                sha256: hex::encode(hasher.finalize()),
+            },
+        );
+    }
+    let _ = handle
+        .disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await;
+    Ok(out)
+}
+
+/// List workspace-relative files under the configured trees on the remote.
+/// Used so a 3-way probe can adopt dest-only files (e.g. FileZilla uploads)
+/// without hashing the entire tree.
+pub async fn list_remote_rel_paths(
+    profile: &ServerProfile,
+    tree_rels: &[PathBuf],
+    password: Option<String>,
+    key_passphrase: Option<String>,
+) -> AppResult<Vec<String>> {
+    let (handle, fingerprint) =
+        client::connect(profile, password, key_passphrase).await?;
+    client::verify_fingerprint_strict(profile, &fingerprint)?;
+    let sftp = client::open_sftp(&handle).await?;
+    let mut out = Vec::new();
+    for rel in tree_rels {
+        let remote = client::resolve_remote(profile, rel);
+        let rel_key = rel.to_string_lossy().replace('\\', "/");
+        let meta = match sftp.metadata(&remote).await {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if meta.is_regular() {
+            out.push(rel_key);
+            continue;
+        }
+        if meta.is_dir() {
+            list_tree_rel_paths(&sftp, &remote, &rel_key, &mut out).await;
+        }
+    }
+    let _ = handle
+        .disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await;
+    Ok(out)
+}
+
+async fn list_tree_rel_paths(
+    sftp: &SftpSession,
+    remote_root: &str,
+    rel_prefix: &str,
+    out: &mut Vec<String>,
+) {
+    let mut queue: Vec<(String, String)> =
+        vec![(remote_root.to_string(), rel_prefix.to_string())];
+    while let Some((remote_dir, rel_dir)) = queue.pop() {
+        let entries = match sftp.read_dir(&remote_dir).await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        for entry in entries {
+            let name = entry.file_name();
+            if name == "." || name == ".." {
+                continue;
+            }
+            let remote_path = format!("{}/{}", remote_dir.trim_end_matches('/'), name);
+            let rel_path = if rel_dir.is_empty() {
+                name
+            } else {
+                format!("{rel_dir}/{name}")
+            };
+            match entry.file_type() {
+                FileType::Dir => queue.push((remote_path, rel_path)),
+                FileType::File | FileType::Symlink => out.push(rel_path),
+                _ => {}
+            }
+        }
+    }
+}
+
+pub async fn download_rels(
+    profile: &ServerProfile,
+    workspace: &Path,
+    rels: &[String],
+    password: Option<String>,
+    key_passphrase: Option<String>,
+) -> AppResult<u32> {
+    let (handle, fingerprint) =
+        client::connect(profile, password, key_passphrase).await?;
+    client::verify_fingerprint_strict(profile, &fingerprint)?;
+    let sftp = client::open_sftp(&handle).await?;
+    let mut n = 0u32;
+    for rel in rels {
+        let remote = client::resolve_remote_str(profile, rel);
+        let local = workspace.join(rel);
+        match download_file(&sftp, &remote, &local).await {
+            Ok(_) => n += 1,
+            Err(e) => {
+                log::warn!("download {rel}: {e}");
+            }
+        }
+    }
+    let _ = handle
+        .disconnect(russh::Disconnect::ByApplication, "", "en")
+        .await;
+    Ok(n)
+}
+
 async fn upload_file(
     sftp: &SftpSession,
     local_path: &Path,
@@ -994,6 +1130,7 @@ mod tests {
             paths: ProfilePaths {
                 mpmissions_relative: mpmissions.into(),
                 profiles_relative: "profiles".into(),
+                local_profiles_relative: None,
             },
             map: MapId::Chernarusplus,
             custom_map_id: None,

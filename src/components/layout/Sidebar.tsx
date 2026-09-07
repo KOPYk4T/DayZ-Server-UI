@@ -12,13 +12,11 @@ import {
   MapPin,
   MessagesSquare,
   PackageSearch,
-  Rocket,
   Settings,
   Shield,
   ShirtIcon,
   Sliders,
   Target,
-  Upload,
   Wrench,
 } from "lucide-react";
 
@@ -34,8 +32,8 @@ import type { CapabilityTier } from "@/types/ipc";
  * Four visual tiers, each styled distinctly so the hierarchy reads
  * at a glance even without borders:
  *
- *   MENU         — top-level section. Bold, uppercase, wide tracking.
- *     Category   — grouping under a menu. Small-caps, muted.
+ *   MENU         — top-level section. IBM Plex semibold, paper.
+ *     Category   — grouping under a menu. Eyebrow, mute.
  *       Item     — a navigable route. Regular weight, icon left.
  *         sub   — an item nested one level deeper (e.g. per-mod
  *                 configurators under Mods). Dimmer icon, extra
@@ -136,8 +134,7 @@ function useNavSections(): Section[] {
       items: [
         // Profile picker is reachable from the top bar; removing
         // the sidebar entry collapses the duplicate path.
-        { to: "/app/sync", label: "Pull", icon: ArrowDownToLine },
-        { to: "/app/sync", label: "Deploy", icon: Upload },
+        { to: "/app/sync", label: "Sync", icon: ArrowDownToLine },
         {
           to: "/app/backups",
           label: "History & Backups",
@@ -267,7 +264,7 @@ export function Sidebar() {
 
 function MenuGroup({ group }: { group: Group }) {
   return (
-    <section className="mb-5">
+    <section className="mb-8">
       <MenuHeading>
         <span>{group.heading}</span>
         {group.tier ? <TierPill tier={group.tier} /> : null}
@@ -280,7 +277,7 @@ function MenuGroup({ group }: { group: Group }) {
 function MenuSuperGroup({ group }: { group: SuperGroup }) {
   const Icon = group.icon;
   return (
-    <section className="mb-5">
+    <section className="mb-8">
       <MenuHeading>
         <Icon className="h-3.5 w-3.5 opacity-80" />
         <span>{group.heading}</span>
@@ -298,7 +295,7 @@ function MenuSuperGroup({ group }: { group: SuperGroup }) {
 
 function MenuHeading({ children }: { children: React.ReactNode }) {
   return (
-    <div className="font-display mb-1 flex items-center gap-1.5 px-4 text-[12px] font-semibold tracking-[0.16em] text-foreground/90">
+    <div className="type-section mb-2 flex items-center gap-1.5 px-4">
       {children}
     </div>
   );
@@ -368,7 +365,7 @@ function CategoryHeading({
   icon?: React.ComponentType<{ className?: string }>;
 }) {
   return (
-    <div className="mb-0.5 flex items-center gap-1.5 pl-6 pr-4 font-mono text-[10px] uppercase tracking-[0.2em] text-brand-olive-mid">
+    <div className="type-eyebrow mb-1 flex items-center gap-1.5 pl-6 pr-4">
       {Icon ? <Icon className="h-2.5 w-2.5 opacity-70" /> : null}
       <span>{children}</span>
     </div>
@@ -438,13 +435,6 @@ function Item({ item, depth }: { item: NavItem; depth: ItemDepth }) {
     );
   }
 
-  // Subtle hint on the "Deploy" entry so the Pull/Deploy pair is
-  // distinguishable even though they share a route today.
-  const suffix =
-    item.label === "Deploy" ? (
-      <Rocket className="ml-auto h-3 w-3 opacity-70" />
-    ) : null;
-
   return (
     <li>
       <NavLink
@@ -468,7 +458,6 @@ function Item({ item, depth }: { item: NavItem; depth: ItemDepth }) {
           )}
         />
         <span className="flex-1 truncate">{item.label}</span>
-        {suffix}
       </NavLink>
     </li>
   );

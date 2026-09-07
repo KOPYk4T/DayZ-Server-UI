@@ -10,6 +10,7 @@
 
 pub mod backup;
 pub mod diff;
+pub mod reconcile;
 pub mod snapshot;
 
 use std::path::{Path, PathBuf};
@@ -24,7 +25,7 @@ use crate::profiles::{ConnectionMode, ProfileStore, ServerProfile};
 use crate::sftp;
 
 use self::diff::DiffSummary;
-use self::snapshot::Snapshot;
+use self::snapshot::{FileSnapshot, Snapshot};
 
 pub const WORKSPACE_META_DIR: &str = ".dzmgr";
 pub const LAST_PULL_FILE: &str = "last-pull.json";
@@ -48,6 +49,74 @@ pub fn workspace_relative_paths(profile: &ServerProfile) -> Vec<PathBuf> {
         rels.push(PathBuf::from(f));
     }
     rels
+}
+
+fn fwd_slash(s: &str) -> String {
+    s.replace('\\', "/").trim_matches('/').to_string()
+}
+
+fn profiles_canon(profile: &ServerProfile) -> String {
+    fwd_slash(&profile.paths.profiles_relative)
+}
+
+/// Profiles folder name on the local dedicated server.
+pub fn profiles_on_local(profile: &ServerProfile) -> String {
+    profile
+        .paths
+        .local_profiles_relative
+        .as_deref()
+        .map(fwd_slash)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| profiles_canon(profile))
+}
+
+fn rewrite_prefix(path: &str, from: &str, to: &str) -> String {
+    let p = fwd_slash(path);
+    if from.is_empty() || from == to {
+        return p;
+    }
+    if p == from {
+        return to.to_string();
+    }
+    let prefix = format!("{from}/");
+    if let Some(rest) = p.strip_prefix(&prefix) {
+        if to.is_empty() {
+            return rest.to_string();
+        }
+        return format!("{to}/{rest}");
+    }
+    p
+}
+
+/// Workspace-relative path as it appears under the local server root.
+pub fn rel_on_local_server(profile: &ServerProfile, work_rel: &str) -> String {
+    rewrite_prefix(work_rel, &profiles_canon(profile), &profiles_on_local(profile))
+}
+
+/// Local-server-relative path as it appears in the workspace.
+pub fn rel_from_local_server(profile: &ServerProfile, local_rel: &str) -> String {
+    rewrite_prefix(local_rel, &profiles_on_local(profile), &profiles_canon(profile))
+}
+
+fn local_server_rels(profile: &ServerProfile) -> Vec<PathBuf> {
+    workspace_relative_paths(profile)
+        .into_iter()
+        .map(|r| {
+            PathBuf::from(rel_on_local_server(
+                profile,
+                &r.to_string_lossy().replace('\\', "/"),
+            ))
+        })
+        .collect()
+}
+
+fn snapshot_keys_to_workspace(profile: &ServerProfile, mut snap: Snapshot) -> Snapshot {
+    let mut files = std::collections::BTreeMap::new();
+    for (k, v) in snap.files {
+        files.insert(rel_from_local_server(profile, &k), v);
+    }
+    snap.files = files;
+    snap
 }
 
 pub async fn status_for(
@@ -83,6 +152,24 @@ pub async fn status_for(
         unpushed_count: unpushed_count as u32,
         head_commit,
         last_pushed_commit,
+        local_server_path: local_server_root(profile)
+            .map(|p| p.to_string_lossy().into_owned()),
+        local_server_exists: local_server_root(profile)
+            .map(|p| p.exists())
+            .unwrap_or(false),
+        has_sftp: matches!(profile.mode, ConnectionMode::Sftp) && profile.sftp.is_some(),
+        remote_label: match profile.mode {
+            ConnectionMode::Sftp => profile
+                .sftp
+                .as_ref()
+                .map(|s| format!("{}@{}:{}", s.username, s.host, s.port))
+                .unwrap_or_else(|| "SFTP".into()),
+            ConnectionMode::Local => profile
+                .local
+                .as_ref()
+                .map(|l| l.root_path.clone())
+                .unwrap_or_default(),
+        },
     })
 }
 
@@ -236,7 +323,8 @@ async fn pull_local(
     let mut bytes = 0u64;
 
     for rel in rels {
-        let src = root.join(rel);
+        let src_rel = rel_on_local_server(profile, &rel.to_string_lossy().replace('\\', "/"));
+        let src = root.join(src_rel);
         let dst = workspace.join(rel);
         if !src.exists() {
             // Missing root-level optional files (e.g. `server.cfg`
@@ -308,7 +396,7 @@ async fn push_local(
     for change in &diff.changes {
         let rel = PathBuf::from(&change.path);
         let src = workspace.join(&rel);
-        let dst = root.join(&rel);
+        let dst = root.join(rel_on_local_server(profile, &change.path));
         match change.kind {
             diff::ChangeKind::Deleted => {
                 if dst.exists() {
@@ -369,6 +457,288 @@ fn remove_dir_contents(path: &Path) -> AppResult<()> {
     Ok(())
 }
 
+/// DayZ dedicated folder used to test. `work_dir` on the profile.
+/// Local-mode profiles fall back to the profile folder so Sync to local
+/// still works when Local server was never set separately.
+pub fn local_server_root(profile: &ServerProfile) -> Option<PathBuf> {
+    let from_work = profile
+        .work_dir
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from);
+    if from_work.is_some() {
+        return from_work;
+    }
+    if matches!(profile.mode, ConnectionMode::Local) {
+        return profile.local.as_ref().and_then(|l| {
+            let t = l.root_path.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(t))
+            }
+        });
+    }
+    None
+}
+
+pub fn map_locked_io(err: std::io::Error, dest: &Path) -> AppError {
+    let locked = matches!(err.raw_os_error(), Some(32) | Some(33) | Some(5))
+        || err.kind() == std::io::ErrorKind::PermissionDenied;
+    if locked {
+        AppError::Sync(format!(
+            "file locked — stop the dedicated server and retry: {}",
+            dest.display()
+        ))
+    } else {
+        err.into()
+    }
+}
+
+pub fn copy_file_locked(src: &Path, dst: &Path) -> AppResult<()> {
+    if let Some(parent) = dst.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    if dst.exists() {
+        std::fs::remove_file(dst).map_err(|e| map_locked_io(e, dst))?;
+    }
+    std::fs::copy(src, dst).map_err(|e| map_locked_io(e, dst))?;
+    Ok(())
+}
+
+pub fn empty_snapshot() -> Snapshot {
+    Snapshot {
+        captured_at: Utc::now(),
+        git_commit: String::new(),
+        files: Default::default(),
+    }
+}
+
+/// Three-way against the local dedicated server (disk).
+pub fn probe_local(profile: &ServerProfile, workspace: &Path) -> AppResult<reconcile::ReviewPlan> {
+    let root = local_server_root(profile).ok_or_else(|| {
+        AppError::Sync("set Local server on the profile first".into())
+    })?;
+    if !root.exists() {
+        return Err(AppError::Sync(format!(
+            "Local server path does not exist: {}",
+            root.display()
+        )));
+    }
+    let rels = workspace_relative_paths(profile);
+    let base = load_snapshot(workspace, LAST_PULL_FILE)?.unwrap_or_else(empty_snapshot);
+    let dest_raw = snapshot::capture_under(&root, &local_server_rels(profile), String::new())?;
+    let dest = snapshot_keys_to_workspace(profile, dest_raw);
+    let work = snapshot::capture(workspace, &rels, String::new())?;
+    Ok(reconcile::classify(&base, &dest, &work))
+}
+
+pub fn apply_adopt_from_local(
+    profile: &ServerProfile,
+    workspace: &Path,
+    paths: &[String],
+) -> AppResult<u32> {
+    let root = local_server_root(profile).ok_or_else(|| {
+        AppError::Sync("set Local server on the profile first".into())
+    })?;
+    let mut n = 0u32;
+    for p in paths {
+        let src = root.join(rel_on_local_server(profile, p));
+        let dst = workspace.join(p);
+        if !src.exists() {
+            if dst.exists() {
+                if dst.is_dir() {
+                    std::fs::remove_dir_all(&dst).map_err(|e| map_locked_io(e, &dst))?;
+                } else {
+                    std::fs::remove_file(&dst).map_err(|e| map_locked_io(e, &dst))?;
+                }
+                n += 1;
+            }
+            continue;
+        }
+        copy_file_locked(&src, &dst)?;
+        n += 1;
+    }
+    Ok(n)
+}
+
+pub fn write_to_local(
+    profile: &ServerProfile,
+    workspace: &Path,
+    backups_dir: &Path,
+    paths: &[String],
+) -> AppResult<(u32, u32, Option<backup::BackupEntry>)> {
+    let root = local_server_root(profile).ok_or_else(|| {
+        AppError::Sync("set Local server on the profile first".into())
+    })?;
+    let rels = workspace_relative_paths(profile);
+    let last_pull = load_snapshot(workspace, LAST_PULL_FILE)?.unwrap_or_else(empty_snapshot);
+    let current = snapshot::capture(workspace, &rels, String::new())?;
+    let full = diff::compute_against(&last_pull, &current);
+    let allow: std::collections::HashSet<&str> = paths.iter().map(String::as_str).collect();
+    let mut filtered = full.clone();
+    filtered.changes.retain(|c| allow.contains(c.path.as_str()));
+    filtered.added_count = filtered
+        .changes
+        .iter()
+        .filter(|c| matches!(c.kind, diff::ChangeKind::Added))
+        .count() as u32;
+    filtered.modified_count = filtered
+        .changes
+        .iter()
+        .filter(|c| matches!(c.kind, diff::ChangeKind::Modified))
+        .count() as u32;
+    filtered.deleted_count = filtered
+        .changes
+        .iter()
+        .filter(|c| matches!(c.kind, diff::ChangeKind::Deleted))
+        .count() as u32;
+
+    let backup_entry = if root.exists() {
+        let mut backup_diff = filtered.clone();
+        for c in &mut backup_diff.changes {
+            c.path = rel_on_local_server(profile, &c.path);
+        }
+        backup::capture_before_push(backups_dir, &root, &backup_diff, Utc::now())?
+    } else {
+        None
+    };
+    let _ = backup::prune(backups_dir, backup::DEFAULT_KEEP);
+
+    let mut uploaded = 0u32;
+    let mut deleted = 0u32;
+    for change in &filtered.changes {
+        let rel = PathBuf::from(&change.path);
+        let src = workspace.join(&rel);
+        let dst = root.join(rel_on_local_server(profile, &change.path));
+        match change.kind {
+            diff::ChangeKind::Deleted => {
+                if dst.exists() {
+                    std::fs::remove_file(&dst).map_err(|e| map_locked_io(e, &dst))?;
+                    deleted += 1;
+                }
+            }
+            diff::ChangeKind::Added | diff::ChangeKind::Modified => {
+                copy_file_locked(&src, &dst)?;
+                uploaded += 1;
+            }
+        }
+    }
+
+    let commit = git_ops::commit_all(
+        workspace,
+        &format!("sync to local @ {}", Utc::now().to_rfc3339()),
+    )?;
+    let mut snap = snapshot::capture(workspace, &rels, commit)?;
+    snap.git_commit = snap.git_commit.clone();
+    save_snapshot(workspace, LAST_PULL_FILE, &snap)?;
+    save_snapshot(workspace, LAST_PUSH_FILE, &snap)?;
+    Ok((uploaded, deleted, backup_entry))
+}
+
+/// Mirror Local server → workspace (Reset from local).
+pub async fn reset_from_local(
+    profile: &ServerProfile,
+    workspace: &Path,
+    store: Arc<Mutex<ProfileStore>>,
+) -> AppResult<PullResult> {
+    let root = local_server_root(profile).ok_or_else(|| {
+        AppError::Sync("set Local server on the profile first".into())
+    })?;
+    let mut synthetic = profile.clone();
+    synthetic.mode = ConnectionMode::Local;
+    synthetic.local = Some(crate::profiles::LocalConnection {
+        root_path: root.to_string_lossy().into_owned(),
+    });
+    pull(&synthetic, workspace, store, None, None).await
+}
+
+pub async fn probe_remote(
+    profile: &ServerProfile,
+    workspace: &Path,
+    password: Option<String>,
+    key_passphrase: Option<String>,
+) -> AppResult<reconcile::ReviewPlan> {
+    if !matches!(profile.mode, ConnectionMode::Sftp) {
+        return Err(AppError::Sync("Remote is not SFTP on this profile".into()));
+    }
+    let rels = workspace_relative_paths(profile);
+    let base = load_snapshot(workspace, LAST_PULL_FILE)?.unwrap_or_else(empty_snapshot);
+    let work = snapshot::capture(workspace, &rels, String::new())?;
+    let listed = sftp::list_remote_rel_paths(
+        profile,
+        &rels,
+        password.clone(),
+        key_passphrase.clone(),
+    )
+    .await?;
+    let mut keys: Vec<String> = base.files.keys().cloned().collect();
+    for k in work.files.keys() {
+        if !keys.contains(k) {
+            keys.push(k.clone());
+        }
+    }
+    let dest_only: Vec<String> = listed
+        .into_iter()
+        .filter(|p| !keys.iter().any(|k| k == p))
+        .collect();
+    let mut remote_files =
+        sftp::hash_remote_files(profile, &keys, password, key_passphrase).await?;
+    for p in dest_only {
+        remote_files.entry(p).or_insert(FileSnapshot {
+            size: 0,
+            sha256: "remote-only".into(),
+        });
+    }
+    let dest = Snapshot {
+        captured_at: Utc::now(),
+        git_commit: String::new(),
+        files: remote_files,
+    };
+    Ok(reconcile::classify(&base, &dest, &work))
+}
+
+pub async fn write_to_remote(
+    profile: &ServerProfile,
+    workspace: &Path,
+    store: Arc<Mutex<ProfileStore>>,
+    password: Option<String>,
+    key_passphrase: Option<String>,
+    paths: &[String],
+) -> AppResult<PushResult> {
+    let rels = workspace_relative_paths(profile);
+    let last_pull = load_snapshot(workspace, LAST_PULL_FILE)?
+        .ok_or_else(|| AppError::Sync("import or Reset from Local first".into()))?;
+    let current = snapshot::capture(workspace, &rels, String::new())?;
+    let mut diff = diff::compute_against(&last_pull, &current);
+    let allow: std::collections::HashSet<&str> = paths.iter().map(String::as_str).collect();
+    if !allow.is_empty() {
+        diff.changes.retain(|c| allow.contains(c.path.as_str()));
+    }
+    let (uploaded, deleted, total_bytes) =
+        sftp::push_diff(profile, workspace, &diff, password, key_passphrase).await?;
+    let commit =
+        git_ops::commit_all(workspace, &format!("push @ {}", Utc::now().to_rfc3339()))?;
+    let mut snap = snapshot::capture(workspace, &rels, commit.clone())?;
+    snap.git_commit = commit.clone();
+    save_snapshot(workspace, LAST_PUSH_FILE, &snap)?;
+    save_snapshot(workspace, LAST_PULL_FILE, &snap)?;
+    {
+        let mut s = store.lock().await;
+        s.mark_pushed(&profile.id)?;
+    }
+    Ok(PushResult {
+        profile_id: profile.id.clone(),
+        uploaded_count: uploaded as u32,
+        deleted_count: deleted as u32,
+        total_bytes,
+        git_commit: commit,
+        completed_at: Utc::now().to_rfc3339(),
+        backup: None,
+    })
+}
+
 fn save_snapshot(workspace: &Path, filename: &str, snap: &Snapshot) -> AppResult<()> {
     let meta = workspace.join(WORKSPACE_META_DIR);
     std::fs::create_dir_all(&meta)?;
@@ -405,6 +775,10 @@ pub struct WorkspaceStatus {
     pub unpushed_count: u32,
     pub head_commit: Option<String>,
     pub last_pushed_commit: Option<String>,
+    pub local_server_path: Option<String>,
+    pub local_server_exists: bool,
+    pub has_sftp: bool,
+    pub remote_label: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -480,6 +854,7 @@ mod tests {
             paths: ProfilePaths {
                 mpmissions_relative: "mpmissions/m".into(),
                 profiles_relative: "profiles".into(),
+                local_profiles_relative: None,
             },
             map: MapId::Chernarusplus,
             custom_map_id: None,
@@ -669,5 +1044,24 @@ mod tests {
         pull_local(&profile, &ws, &rels).await.unwrap();
         let contents = std::fs::read_to_string(ws.join("serverDZ.cfg")).unwrap();
         assert!(contents.contains("new = 1"));
+    }
+
+    #[test]
+    fn remaps_instances_to_profiles() {
+        let mut p = profile_with_root(Path::new("."));
+        p.paths.local_profiles_relative = Some("instances".into());
+        assert_eq!(
+            rel_on_local_server(&p, "profiles/Users/x.xml"),
+            "instances/Users/x.xml"
+        );
+        assert_eq!(
+            rel_from_local_server(&p, "instances/Users/x.xml"),
+            "profiles/Users/x.xml"
+        );
+        assert_eq!(
+            rel_on_local_server(&p, "mpmissions/m/types.xml"),
+            "mpmissions/m/types.xml"
+        );
+        assert_eq!(rel_on_local_server(&p, "profiles"), "instances");
     }
 }

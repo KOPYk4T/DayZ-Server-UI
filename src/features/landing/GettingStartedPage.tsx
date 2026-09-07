@@ -65,9 +65,9 @@ export function GettingStartedPage() {
     },
     {
       n: 2,
-      title: "Pull the current config",
+      title: "Import the workspace",
       description:
-        "Mirrors mpmissions/, profiles/, and serverDZ.cfg into a local workspace and commits them to a per-profile git repo. Safe: it doesn't write back yet.",
+        "Open Sync. If Local server is set and the workspace is empty, the app imports mpmissions, profiles, and serverDZ.cfg. You edit the workspace, not Steam.",
       state: !hasProfile
         ? "todo"
         : hasPulled
@@ -93,15 +93,15 @@ export function GettingStartedPage() {
     },
     {
       n: 5,
-      title: "Review & push",
+      title: "Sync to local, then Push",
       description:
-        "Deploy → Sync shows a full diff. Confirm it and the app writes to the server; a pre-push backup captures what's about to be overwritten.",
+        "Sync to local copies the reviewed diff to your dedicated folder so you can boot and test. Push to Remote uploads that same kind of reviewed diff to SFTP.",
       state: !hasDirty
         ? hasPushed
           ? "done"
           : "todo"
         : "in_progress",
-      action: { label: "Review push", to: "/app/sync" },
+      action: { label: "Open Sync", to: "/app/sync" },
     },
   ];
 
@@ -115,9 +115,9 @@ export function GettingStartedPage() {
             <Compass className="h-5 w-5 text-primary" /> Getting started
           </h1>
           <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            The basic loop: pull → edit → review → push. Steps auto-
-            check as you complete them — come back here any time you
-            feel lost.
+            The basic loop: edit → Sync to local → Push to Remote.
+            Steps auto-check as you complete them — come back here any
+            time you feel lost.
           </p>
         </div>
         <Card className="shrink-0">

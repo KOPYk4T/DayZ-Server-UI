@@ -88,6 +88,11 @@ pub struct LocalConnection {
 pub struct ProfilePaths {
     pub mpmissions_relative: String,
     pub profiles_relative: String,
+    /// Folder name on the local dedicated server when it differs from
+    /// `profiles_relative` (workspace + SFTP). Example: remote
+    /// `profiles`, local `instances`. `None` means the same name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_profiles_relative: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -357,6 +357,7 @@ mod tests {
             paths: ProfilePaths {
                 mpmissions_relative: String::new(),
                 profiles_relative: String::new(),
+                local_profiles_relative: None,
             },
             map: MapId::Chernarusplus,
             custom_map_id: None,

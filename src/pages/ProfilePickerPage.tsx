@@ -40,12 +40,11 @@ import {
   useDeleteProfile,
   useDuplicateProfile,
   useProfileList,
-  usePull,
   useSecretsPresence,
   useTestConnection,
 } from "@/hooks/useProfiles";
 import * as tauri from "@/lib/tauri";
-import { cn, errorMessage, formatRelativeTime } from "@/lib/utils";
+import { errorMessage, formatRelativeTime } from "@/lib/utils";
 import { useProfileStore } from "@/stores/profileStore";
 import { useUIStore } from "@/stores/uiStore";
 import type { ServerProfile } from "@/types/ipc";
@@ -138,6 +137,11 @@ export function ProfilePickerPage() {
                   key={p.id}
                   profile={p}
                   onOpen={() => openWorkspace(p)}
+                  onSync={() => {
+                    setActive(p);
+                    setActiveId(p.id);
+                    navigate("/app/sync");
+                  }}
                   onEdit={() => openForEdit(p)}
                   onDelete={() => setDeleting(p)}
                 />
@@ -209,16 +213,17 @@ function DeleteAction({
 function ProfileCard({
   profile,
   onOpen,
+  onSync,
   onEdit,
   onDelete,
 }: {
   profile: ServerProfile;
   onOpen: () => void;
+  onSync: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
   const test = useTestConnection();
-  const pull = usePull(profile.id);
   const duplicate = useDuplicateProfile();
   const secrets = useSecretsPresence(profile.id);
   // Only SFTP profiles need credentials in the keychain; local folder
@@ -242,31 +247,6 @@ function ProfileCard({
     });
   };
 
-  const handlePull = () => {
-    pull.mutate(undefined, {
-      onSuccess: (r) => {
-        if (r.skipped.length > 0) {
-          // Not a failure — the main pull succeeded — but the server
-          // refused some files. Surface as a warning with a preview.
-          const preview = r.skipped
-            .slice(0, 3)
-            .map((s) => s.path.split("/").pop())
-            .join(", ");
-          const more =
-            r.skipped.length > 3 ? ` (+${r.skipped.length - 3} more)` : "";
-          toast.warning(`pulled ${profile.name} — skipped ${r.skipped.length} file(s)`, {
-            description: `${preview}${more}. These files are held open by the running server and can't be read over SFTP.`,
-          });
-        } else {
-          toast.success(`pulled ${profile.name}`, {
-            description: "workspace is up to date",
-          });
-        }
-      },
-      onError: (err) =>
-        toast.error(errorMessage(err)),
-    });
-  };
 
   const handleDuplicate = () => {
     duplicate.mutate(profile.id, {
@@ -381,7 +361,7 @@ function ProfileCard({
           <dd className="truncate font-mono text-foreground">
             {profile.paths.profilesRelative}
           </dd>
-          <dt>last pull</dt>
+          <dt>last import</dt>
           <dd>{formatRelativeTime(profile.lastPullAt ?? undefined)}</dd>
         </dl>
       </CardContent>
@@ -398,15 +378,9 @@ function ProfileCard({
           <Plug className="mr-1.5 h-3.5 w-3.5" />
           {test.isPending ? "Testing…" : "Test"}
         </Button>
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={handlePull}
-          disabled={pull.isPending}
-          className={cn(pull.isPending && "opacity-75")}
-        >
+        <Button size="sm" variant="secondary" onClick={onSync}>
           <Download className="mr-1.5 h-3.5 w-3.5" />
-          {pull.isPending ? "Pulling…" : "Pull"}
+          Sync
         </Button>
         <Button
           size="sm"

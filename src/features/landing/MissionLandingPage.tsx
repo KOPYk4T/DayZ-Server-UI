@@ -159,8 +159,8 @@ export function MissionLandingPage() {
       footer={
         <div className="rounded-md border border-dashed border-border/60 bg-muted/20 p-3 text-[11px] text-muted-foreground">
           <FileText className="mr-1.5 inline h-3 w-3" />
-          All edits land in the workspace's mpmissions tree first. Review
-          the diff on <strong>Deploy → Sync</strong> before pushing.
+          All edits land in the workspace first. Review the file list on
+          <strong>Sync</strong> before Sync to local or Push to Remote.
         </div>
       }
     />

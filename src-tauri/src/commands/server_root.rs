@@ -240,8 +240,8 @@ fn profile_markers(dir: &Path) -> (Vec<String>, u32) {
         .file_name()
         .map(|n| n.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
-    if name_lower == "profiles" || name_lower == "profile" {
-        markers.push("folder named 'profile(s)'".into());
+    if name_lower == "profiles" || name_lower == "profile" || name_lower == "instances" {
+        markers.push(format!("folder named '{name_lower}'"));
         score += 2;
     }
 
