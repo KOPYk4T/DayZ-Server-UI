@@ -1,7 +1,7 @@
 //! Environment probe for the Reskin addon.
 //!
-//! The reskin pipeline shells out to Bohemia + Mikero tools that ship
-//! with the app under `tools/`, and reads vanilla DayZ data from the
+//! The reskin pipeline shells out to Bohemia tools (DayZ Tools /
+//! Locate) and Mikero packers, and reads vanilla DayZ data from the
 //! operator's P: drive (Bohemia's Workdrive convention). Before the
 //! addon will let the user start a reskin, we need to know:
 //!
@@ -48,10 +48,11 @@ pub struct PDriveStatus {
     /// `true` when `P:\DZ\` exists — vanilla addons (configs, p3d,
     /// textures) live under here.
     pub has_dz: bool,
-    /// When signing is expected to work the operator needs a
-    /// `.biprivatekey`. Surface whether *one* of the bundled ones
-    /// is detected so we can warn otherwise.
+    /// `.biprivatekey` found next to DSSignFile, in bundled
+    /// `tools/DsUtils`, or in AppData `keys/`.
     pub private_key_present: bool,
+    /// Absolute path of that key when present.
+    pub signing_key_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -110,15 +111,16 @@ const TOOLS: &[(&str, &str, &str)] = &[
 #[tauri::command]
 pub async fn reskin_env_check(
     app: AppHandle,
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
 ) -> AppResult<ReskinEnvironment> {
     let tools_dir = tools::resolve_tools_dir(&app);
+    let app_data = &state.app_data_dir;
     let tools_dir_exists = tools_dir.exists();
 
     let tools: Vec<ToolStatus> = TOOLS
         .iter()
         .map(|(id, display, rel)| {
-            let candidate = tools_dir.join(rel);
+            let candidate = resolved_tool_path(id, app_data, &tools_dir);
             let present = candidate.is_file();
             ToolStatus {
                 id,
@@ -134,18 +136,16 @@ pub async fn reskin_env_check(
         })
         .collect();
 
-    let p_drive = probe_p_drive(&tools_dir);
+    let p_drive = probe_p_drive(app_data, &tools_dir);
 
-    // "Ready" = everything except `pboProject` and `deRap`, which are
-    // nice-to-haves (MakePbo is enough to pack, and the DePboTools
-    // bundle always ships all of them together anyway). P: drive
-    // must have both the scripts tree and DZ tree.
+    // "Ready" = required emit tools + P: data. A missing bundled
+    // `tools/` folder is fine when DayZ Tools / Locate filled the
+    // Bohemia slots. Mikero extras (pboProject, DeRap) stay optional.
     let required_ids = ["imageToPaa", "makePbo", "dsSignFile", "dsCreateKey"];
     let required_present = required_ids
         .iter()
         .all(|id| tools.iter().any(|t| t.id == *id && t.present));
-    let ready = tools_dir_exists
-        && required_present
+    let ready = required_present
         && p_drive.mounted
         && p_drive.has_scripts
         && p_drive.has_dz;
@@ -159,32 +159,36 @@ pub async fn reskin_env_check(
     })
 }
 
-fn probe_p_drive(tools_dir: &Path) -> PDriveStatus {
+fn resolved_tool_path(id: &str, app_data: &Path, tools_dir: &Path) -> PathBuf {
+    match id {
+        "imageToPaa" => tools::image_to_paa_exe_resolved(app_data, tools_dir),
+        "makePbo" => tools::make_pbo_exe_resolved(app_data, tools_dir),
+        "deRap" => tools::derap_exe_resolved(app_data, tools_dir),
+        "dsSignFile" => tools::ds_sign_file_exe_resolved(app_data, tools_dir),
+        "dsCreateKey" => tools::ds_create_key_exe_resolved(app_data, tools_dir),
+        _ => tools_dir.join(
+            TOOLS
+                .iter()
+                .find(|(tid, _, _)| *tid == id)
+                .map(|(_, _, rel)| *rel)
+                .unwrap_or(id),
+        ),
+    }
+}
+
+fn probe_p_drive(app_data: &Path, tools_dir: &Path) -> PDriveStatus {
     let p_root = PathBuf::from("P:\\");
     let mounted = std::fs::metadata(&p_root).is_ok();
     let has_scripts = p_root.join("scripts").is_dir();
     let has_dz = p_root.join("DZ").is_dir();
-
-    // Detect the bundled keypair we know is shipped in tools/DsUtils.
-    let private_key_present = tools_dir
-        .join("DsUtils")
-        .read_dir()
-        .map(|it| {
-            it.filter_map(Result::ok)
-                .any(|e| {
-                    e.path()
-                        .extension()
-                        .and_then(|s| s.to_str())
-                        .map(|s| s.eq_ignore_ascii_case("biprivatekey"))
-                        .unwrap_or(false)
-                })
-        })
-        .unwrap_or(false);
+    let signing_key_path = tools::find_private_key(app_data, tools_dir)
+        .map(|p| p.to_string_lossy().into_owned());
 
     PDriveStatus {
         mounted,
         has_scripts,
         has_dz,
-        private_key_present,
+        private_key_present: signing_key_path.is_some(),
+        signing_key_path,
     }
 }

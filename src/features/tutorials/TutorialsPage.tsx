@@ -724,8 +724,8 @@ const TUTORIALS: Tutorial[] = [
               </li>
               <li>Packs the addon with MakePbo (mirrors to P: drive for texture validation)</li>
               <li>
-                Signs with the first <code>.biprivatekey</code> in{" "}
-                <code>tools/DsUtils/</code>
+                Signs with the first <code>.biprivatekey</code> next
+                to DSSignFile (DayZ Tools or Setup → Locate)
               </li>
               <li>
                 Copies external PBOs into <code>addons/</code> with

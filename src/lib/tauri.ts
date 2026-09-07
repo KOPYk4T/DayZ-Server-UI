@@ -477,10 +477,12 @@ export function ceZonesList(
 export function ceZonesWriteOverride(
   profileId: string,
   tierOverride?: import("@/types/ipc").TierOverride | null,
+  usageOverride?: import("@/types/ipc").UsageOverride | null,
 ): Promise<import("@/types/ipc").CeZonesWriteResult> {
   return invoke("ce_zones_write_override", {
     profileId,
     tierOverride: tierOverride ?? null,
+    usageOverride: usageOverride ?? null,
   });
 }
 

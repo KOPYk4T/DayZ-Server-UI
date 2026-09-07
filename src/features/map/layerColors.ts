@@ -77,6 +77,15 @@ export const USAGE_COLORS: Record<string, string> = {
   Farm: "#22c55e", // green
   Hunting: "#15803d", // dark green
   Coast: "#0ea5e9", // sky blue
+  Office: "#6366f1", // indigo
+  SeasonalEvent: "#d946ef", // fuchsia
+  ContaminatedArea: "#84cc16", // lime
+  Special: "#e879f9", // pink-fuchsia
+  Lunapark: "#f472b6", // rose
+  Underground: "#78716c", // stone
+  AbandonedMine: "#a8a29e", // stone-400
+  Camp: "#65a30d", // lime-600
+  SatelliteStation: "#38bdf8", // sky-400
 };
 
 /** Priority order for picking a placement's "dominant" usage when
@@ -116,4 +125,12 @@ export function dominantUsage(usages: readonly string[]): string | null {
 export function colorForUsage(usage: string | null): string {
   if (!usage) return UNKNOWN_USAGE_COLOR;
   return USAGE_COLORS[usage] ?? UNKNOWN_USAGE_COLOR;
+}
+
+export function hexToRgb(hex: string): [number, number, number] {
+  const s = hex.trim().replace(/^#/, "");
+  if (s.length !== 6) return [107, 114, 128];
+  const n = Number.parseInt(s, 16);
+  if (Number.isNaN(n)) return [107, 114, 128];
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
 }

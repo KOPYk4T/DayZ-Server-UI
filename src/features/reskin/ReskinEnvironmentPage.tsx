@@ -240,22 +240,23 @@ function ToolsCard({ env }: { env: ReskinEnvironment }) {
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
-          <Wrench className="h-4 w-4" /> Bundled tools
+          <Wrench className="h-4 w-4" /> Build tools
         </CardTitle>
         <CardDescription>
-          These ship inside the app at <code className="font-mono">{env.toolsDir}</code>.
-          If any are missing, drop the full tool folder (DLLs and all)
-          back at the expected location.
+          Bohemia tools (ImageToPAA, DSSignFile) come from DayZ Tools
+          on Steam. Mikero tools need a Locate in Setup. Optional
+          bundled folder:{" "}
+          <code className="font-mono">{env.toolsDir}</code>.
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {!env.toolsDirExists ? (
+        {!env.toolsDirExists
+        && env.tools.some((t) => !t.present && t.id !== "pboProject" && t.id !== "deRap") ? (
           <Alert className="mb-3">
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription>
-              The tools directory doesn't exist at the expected path.
-              Set <code className="font-mono">DZMGR_TOOLS_DIR</code> to
-              override, or restore the <code className="font-mono">tools/</code> folder next to the app.
+              A required tool is missing. Install DayZ Tools from
+              Steam, or use Setup → Locate for Mikero exes.
             </AlertDescription>
           </Alert>
         ) : null}
@@ -368,17 +369,20 @@ function SigningCard({ env }: { env: ReskinEnvironment }) {
         </CardTitle>
         <CardDescription>
           Public servers with <code className="font-mono">verifySignatures=2</code> reject
-          unsigned mods. The addon signs every built PBO with a
-          <code className="mx-1 font-mono">.biprivatekey</code> from
-          <code className="mx-1 font-mono">tools/DsUtils/</code>.
+          unsigned mods. The app uses the{" "}
+          <code className="font-mono">.biprivatekey</code> next to
+          DSSignFile — usually DayZ Tools — or one you Locate in Setup.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <ul className="divide-y divide-border/60 text-sm">
           <StatusRow
             ok={ok}
-            label="At least one .biprivatekey detected"
-            detail="Drop an existing keypair into tools/DsUtils/, or let the wizard create one with DSCreateKey on first build."
+            label={ok ? "Signing key found" : "No signing key yet"}
+            detail={
+              env.pDrive.signingKeyPath
+                ?? "Install DayZ Tools, or put a .biprivatekey next to DSSignFile. You can also Locate the exe in Setup."
+            }
           />
         </ul>
       </CardContent>

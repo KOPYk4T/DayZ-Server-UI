@@ -620,10 +620,13 @@ export interface TerritoriesSnapshot {
 
 // ---------- CE zone overlays (from areaflags.map) ----------
 
+export type CeZoneKind = "tier" | "usage";
+
 export interface CeZoneOverlay {
-  /** `Tier1`, `Tier2`, `Tier3`, `Tier4`, or `Unique`. Matches the
-   *  `<value>` tags DayZ accepts in types.xml. */
+  /** Tier: `Tier1`…`Unique`. Usage: the `<usage name>` from
+   *  `cfglimitsdefinition.xml`. */
   name: string;
+  kind: CeZoneKind;
   /** Hex tint the backend already baked into the PNG. Surfaced so
    *  the sidebar legend matches the painted overlay. */
   color: string;
@@ -653,6 +656,9 @@ export interface CeZoneAtlas {
    *  is unavailable. Shown in the UI so operators can confirm. */
   sourcePath: string | null;
   overlays: CeZoneOverlay[];
+  /** `<usage>` names from cfglimitsdefinition.xml, declaration
+   *  order = bit index. Painter uses this even when coverage is 0. */
+  usageNames: string[];
   /** Reason surface when `available: false`. */
   note: string | null;
 }
@@ -670,7 +676,20 @@ export interface CeZonesWriteResult {
   /** Description of what was applied, or `null` for a verbatim
    *  pass-through (e.g. restore-from-vanilla). */
   tierOverrideSummary: string | null;
+  usageOverrideSummary: string | null;
 }
+
+export interface UsageEditCell {
+  row: number;
+  col: number;
+  set: boolean;
+}
+
+export type UsageOverride = {
+  kind: "editCells";
+  bit: number;
+  cells: UsageEditCell[];
+};
 
 /** A single per-cell edit emitted by the painter. `(row, col)` is in
  *  fine-cell coordinates (4096×4096 raster); `bits` is the new tier
@@ -1403,6 +1422,7 @@ export interface ReskinPDriveStatus {
   hasScripts: boolean;
   hasDz: boolean;
   privateKeyPresent: boolean;
+  signingKeyPath: string | null;
 }
 
 export interface ReskinEnvironment {

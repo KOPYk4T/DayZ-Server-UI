@@ -14,9 +14,10 @@
 //!    strings, and vanilla passthroughs in the right slot order.
 //! 4. Shell `MakePbo` against the addon folder → produces
 //!    `<addon>.pbo` next to it.
-//! 5. Sign with `DSSignFile` using the first `.biprivatekey` found
-//!    under `tools/DsUtils/`; copy the matching `.bikey` into
-//!    `keys/` so public servers that enforce signatures accept it.
+//! 5. Sign with `DSSignFile` using the first `.biprivatekey` next
+//!    to the resolved signer (DayZ Tools / Locate / bundled);
+//!    copy the matching `.bikey` into `keys/` so public servers
+//!    that enforce signatures accept it.
 //!
 //! The caller receives a log of each step so the UI can surface a
 //! timeline + final summary.
@@ -135,10 +136,10 @@ pub fn build_from_registry(
         }
     }
 
-    // Resolve tool paths.
-    let image_to_paa = tools::image_to_paa_exe(tools_dir);
-    let make_pbo = tools::make_pbo_exe(tools_dir);
-    let ds_sign = tools::ds_sign_file_exe(tools_dir);
+    // Resolve tool paths (Locate → bundled → DayZ Tools).
+    let image_to_paa = tools::image_to_paa_exe_resolved(app_data_dir, tools_dir);
+    let make_pbo = tools::make_pbo_exe_resolved(app_data_dir, tools_dir);
+    let ds_sign = tools::ds_sign_file_exe_resolved(app_data_dir, tools_dir);
     for (name, path) in [
         ("ImageToPAA.exe", &image_to_paa),
         ("MakePbo.exe", &make_pbo),
@@ -287,7 +288,7 @@ pub fn build_from_registry(
     }
 
     // Sign (optional — if a private key exists).
-    let signed = match find_private_key(tools_dir) {
+    let signed = match tools::find_private_key(app_data_dir, tools_dir) {
         Some(key) => {
             if ds_sign.is_file() {
                 run_ds_sign(&ds_sign, &key, &pbo_path, &mut log)?;
@@ -302,21 +303,21 @@ pub fn build_from_registry(
                     log.push(format!("copied public key to {}", dest.display()));
                 } else {
                     notes.push(format!(
-                        "private key at {} has no matching .bikey — drop one into tools/DsUtils/",
+                        "private key at {} has no matching .bikey beside it",
                         key.display()
                     ));
                 }
                 true
             } else {
                 notes.push(
-                    "DSSignFile.exe missing — PBO packed but not signed".into(),
+                    "DSSignFile.exe missing — PBO packed but not signed. Install DayZ Tools or Locate the exe in Setup.".into(),
                 );
                 false
             }
         }
         None => {
             notes.push(
-                "no .biprivatekey in tools/DsUtils/ — PBO packed but not signed. Public servers with verifySignatures=2 will reject it.".into(),
+                "no .biprivatekey next to DSSignFile — PBO packed but not signed. Public servers with verifySignatures=2 will reject it.".into(),
             );
             false
         }
@@ -936,22 +937,6 @@ fn copy_dir_all(src: &Path, dst: &Path) -> AppResult<()> {
         }
     }
     Ok(())
-}
-
-fn find_private_key(tools_dir: &Path) -> Option<PathBuf> {
-    let dir = tools_dir.join("DsUtils");
-    let read = std::fs::read_dir(dir).ok()?;
-    for e in read.flatten() {
-        let p = e.path();
-        if p.extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.eq_ignore_ascii_case("biprivatekey"))
-            .unwrap_or(false)
-        {
-            return Some(p);
-        }
-    }
-    None
 }
 
 fn derive_public_key_path(private: &Path) -> PathBuf {

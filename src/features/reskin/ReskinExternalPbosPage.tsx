@@ -221,8 +221,8 @@ export function ReskinExternalPbosPage() {
           <strong>Signing tip:</strong> external PBOs we copy keep
           their original <code>.bisign</code>. If a PBO has none, your
           server must set <code>verifySignatures=0</code> or you'll
-          need to sign it yourself with a private key from{" "}
-          <code>tools/DsUtils/</code> — and ship the matching{" "}
+          need to sign it yourself with the key next to DSSignFile
+          (DayZ Tools) — and ship the matching{" "}
           <code>.bikey</code> in <code>keys/</code>.
         </AlertDescription>
       </Alert>

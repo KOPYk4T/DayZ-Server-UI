@@ -11,9 +11,10 @@
 //!
 //! This module owns both sides of that pipeline:
 //!   - **Read**: decode whichever file is live (mission override →
-//!     vanilla), render per-tier PNG overlays for the Leaflet map.
-//!   - **Write**: apply a `TierOverride` transform to the live
-//!     source and save to `<mission>/areaflags.map`.
+//!     vanilla), render per-tier and per-usage PNG overlays for
+//!     the Leaflet map.
+//!   - **Write**: apply a `TierOverride` and/or `UsageOverride` to
+//!     the live source and save to `<mission>/areaflags.map`.
 //!
 //! Format (reverse-engineered empirically — no official spec).
 //! We read the mission copy the operator already has (pull / import);
@@ -29,9 +30,8 @@
 //!   Offset 16  u32 LE  usage_bits   (32)
 //!   Offset 20  u32 LE  reserved     (0)
 //!   Offset 24  4 × (fine_width × fine_height) bytes  — usage bitmask
-//!                                                     planes (1 byte
-//!                                                     each, 4 bytes =
-//!                                                     32 bits per cell)
+//!                                                     (4 bytes/cell,
+//!                                                     interleaved)
 //!   Then the tier plane, in one of two layouts:
 //!     Chernarus / Sakhal — 1 byte per cell (`W×H` bytes).
 //!     Livonia (Enoch)    — 2 cells per byte (`W×H/2` bytes), low
@@ -44,9 +44,14 @@
 //!   boundaries); we split the file into one PNG overlay per tier
 //!   level so the frontend can toggle them independently.
 //!
-//! Usage bits aren't surfaced yet — the 32 bits don't map 1:1 onto
-//! the 17 entries in `cfglimitsdefinition.xml`'s `<usageflags>` and
-//! we're not shipping guesses as labels.
+//! Usage layout: 4 bytes **per cell**, interleaved (BIP), not 4
+//! planar bands. Cell `i` occupies bytes `[i*4, i*4+4)`. Bit `n`
+//! is byte `n/8` of that cell, mask `1 << (n%8)`. Livonia does
+//! **not** nibble-pack usage — only the tier leftover is packed.
+//! Label for bit `n` is the nth `<usage>` in the mission's
+//! `cfglimitsdefinition.xml`. Bits past the last named entry are
+//! hidden. Reordering `<usage>` rows would mislabel existing paint;
+//! append-only is safe.
 //!
 //! Row order in the file stores row 0 at world Z=0 (south). Leaflet
 //! renders PNGs with row 0 at lat=max (north), so we flip vertically
@@ -62,6 +67,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::error::{AppError, AppResult};
+use crate::mission::{limits as limits_mod, MissionContext};
 use crate::profiles::{MapId, ServerProfile};
 use crate::reskin::vanilla_index;
 use crate::state::AppState;
@@ -77,19 +83,28 @@ const TIER_BITS_BYTE: u8 = 0b0001_1111;
 /// Livonia packed nibble: bits 0..=3 (Tier1..Tier4). Unique is absent.
 const TIER_BITS_NIBBLE: u8 = 0b0000_1111;
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CeZoneKind {
+    Tier,
+    Usage,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CeZoneOverlay {
-    /// `Tier1`, `Tier2`, `Tier3`, `Tier4`, `Unique`.
+    /// Tier: `Tier1`…`Unique`. Usage: the `<usage name>` from
+    /// `cfglimitsdefinition.xml`.
     pub name: String,
+    pub kind: CeZoneKind,
     /// Suggested tint. Frontend can override.
     pub color: String,
-    /// Fraction of the map this tier covers, 0..1. Displayed as a
+    /// Fraction of the map this mask covers, 0..1. Displayed as a
     /// badge in the sidebar so operators see at a glance how much
-    /// of the map is tagged Tier4 vs Tier1.
+    /// of the map is tagged Tier4 vs Military.
     pub coverage: f32,
     /// `data:image/png;base64,…`. Alpha channel is binary (cell
-    /// belongs to this tier → opaque, otherwise transparent). The
+    /// belongs to this mask → opaque, otherwise transparent). The
     /// frontend applies opacity uniformly via Leaflet's
     /// ImageOverlay `opacity` prop.
     pub png_data_url: String,
@@ -118,6 +133,10 @@ pub struct CeZoneAtlas {
     /// Absolute path of the file we read, for display in the UI.
     pub source_path: Option<String>,
     pub overlays: Vec<CeZoneOverlay>,
+    /// `<usage>` names from `cfglimitsdefinition.xml` in declaration
+    /// order (bit index). Painter dropdown uses this even when a
+    /// usage has no coverage yet.
+    pub usage_names: Vec<String>,
     /// Reason surface: which file we couldn't read, or why.
     pub note: Option<String>,
 }
@@ -138,6 +157,9 @@ pub struct CeZonesWriteResult {
     /// Description of what `apply` did to the tier plane, or
     /// `null` when the writer copied the source through untouched.
     pub tier_override_summary: Option<String>,
+    /// Same for the usage-plane edit, when the painter saved a
+    /// usage stroke.
+    pub usage_override_summary: Option<String>,
 }
 
 /// Tier-plane transformation applied before writing. Variants cover
@@ -281,6 +303,73 @@ impl TierOverride {
     }
 }
 
+/// Sparse usage-plane paint. Bit `n` is the nth `<usage>` in
+/// `cfglimitsdefinition.xml`. Set ORs the bit (other usages on
+/// the cell stay); clear removes only that bit. On-disk layout
+/// is BIP: 4 bytes per cell.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum UsageOverride {
+    EditCells { bit: u8, cells: Vec<UsageEditCell> },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageEditCell {
+    pub row: u32,
+    pub col: u32,
+    pub set: bool,
+}
+
+impl UsageOverride {
+    fn apply(&self, usage: &mut [u8], width: u32, height: u32) -> AppResult<()> {
+        let UsageOverride::EditCells { bit, cells } = self;
+        if *bit >= 32 {
+            return Err(AppError::Internal(format!(
+                "usage bit {bit} out of range (must be 0..=31)"
+            )));
+        }
+        let plane = (*bit / 8) as usize;
+        let mask = 1u8 << (*bit % 8);
+        for c in cells {
+            if c.row >= height || c.col >= width {
+                return Err(AppError::Internal(format!(
+                    "usage edit out of range: row={}, col={} (raster is {width}×{height})",
+                    c.row, c.col
+                )));
+            }
+        }
+        let w = width as usize;
+        for c in cells {
+            let i = ((c.row as usize) * w + (c.col as usize)) * 4 + plane;
+            if i >= usage.len() {
+                return Err(AppError::Internal(format!(
+                    "usage edit index {i} past plane ({} bytes)",
+                    usage.len()
+                )));
+            }
+            if c.set {
+                usage[i] |= mask;
+            } else {
+                usage[i] &= !mask;
+            }
+        }
+        Ok(())
+    }
+
+    fn summary(&self) -> String {
+        let UsageOverride::EditCells { bit, cells } = self;
+        let verb = if cells.iter().any(|c| c.set) && cells.iter().any(|c| !c.set) {
+            "edited"
+        } else if cells.first().map(|c| c.set).unwrap_or(false) {
+            "painted"
+        } else {
+            "erased"
+        };
+        format!("{verb} {} cells on usage bit {bit}", cells.len())
+    }
+}
+
 /// Resolve the live `areaflags.map` for a profile. Mission-level
 /// override wins — that's what the server actually reads. Falls
 /// back to the vanilla file on the P: drive when no override
@@ -354,16 +443,19 @@ pub async fn ce_zones_list(
                 source: None,
                 source_path: None,
                 overlays: Vec::new(),
+                usage_names: load_usage_names(&workspace, &profile),
                 note: Some(e.to_string()),
             });
         }
     };
-    match parse_areaflags(&path) {
+    let usage_names = load_usage_names(&workspace, &profile);
+    match parse_areaflags(&path, &usage_names) {
         Ok(overlays) => Ok(CeZoneAtlas {
             available: true,
             source: Some(source),
             source_path: Some(path.to_string_lossy().into_owned()),
             overlays,
+            usage_names,
             note: None,
         }),
         Err(e) => Err(AppError::Internal(format!(
@@ -383,6 +475,7 @@ pub async fn ce_zones_list(
 pub async fn ce_zones_write_override(
     profile_id: String,
     tier_override: Option<TierOverride>,
+    usage_override: Option<UsageOverride>,
     state: State<'_, AppState>,
 ) -> AppResult<CeZonesWriteResult> {
     let profile = {
@@ -416,6 +509,13 @@ pub async fn ce_zones_write_override(
         }
         None => None,
     };
+    let usage_summary = match &usage_override {
+        Some(op) => {
+            op.apply(&mut af.usage_planes, af.fine_w, af.fine_h)?;
+            Some(op.summary())
+        }
+        None => None,
+    };
 
     let out_path = mission_dir.join("areaflags.map");
     af.write(&out_path)
@@ -427,6 +527,7 @@ pub async fn ce_zones_write_override(
         bytes,
         source_was: source_kind,
         tier_override_summary: summary,
+        usage_override_summary: usage_summary,
     })
 }
 
@@ -456,6 +557,36 @@ fn tier_name(idx: u8) -> &'static str {
     }
 }
 
+/// Palette shared with the frontend `USAGE_COLORS` table so the
+/// baked PNG and the sidebar swatch stay in lockstep. Unknown
+/// names fall through to gray — same as building-placement dots.
+fn usage_color(name: &str) -> &'static str {
+    match name {
+        "Military" => "#dc2626",
+        "Police" => "#f97316",
+        "Prison" => "#991b1b",
+        "Firefighter" => "#ea580c",
+        "Medic" => "#ec4899",
+        "School" => "#a855f7",
+        "Industrial" => "#f59e0b",
+        "Town" => "#3b82f6",
+        "Village" => "#06b6d4",
+        "Farm" => "#22c55e",
+        "Hunting" => "#15803d",
+        "Coast" => "#0ea5e9",
+        "Office" => "#6366f1",
+        "SeasonalEvent" => "#d946ef",
+        "ContaminatedArea" => "#84cc16",
+        "Special" => "#e879f9",
+        "Lunapark" => "#f472b6",
+        "Underground" => "#78716c",
+        "AbandonedMine" => "#a8a29e",
+        "Camp" => "#65a30d",
+        "SatelliteStation" => "#38bdf8",
+        _ => "#6b7280",
+    }
+}
+
 /// How the on-disk tier plane is packed. In memory `tier_plane` is
 /// always 1 byte per cell so the painter / PNG encoder stay simple.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -479,10 +610,9 @@ pub(crate) struct AreaflagsFile {
     pub fine_w: u32,
     pub fine_h: u32,
     packing: TierPacking,
-    /// 4 × (fine_w × fine_h) bytes of usage bitmasks. Opaque to this
-    /// module — usage bit decoding is deferred. When we write out
-    /// a modified file these bytes flow through untouched so
-    /// vanilla usage geometry is preserved.
+    /// 4 bytes per cell, interleaved (cell `i` → `[i*4, i*4+4)`).
+    /// Bit `n` is byte `n/8`, mask `1 << (n%8)`. Writes copy these
+    /// bytes through so usage geometry survives a tier-only edit.
     pub usage_planes: Vec<u8>,
     /// Unpacked 1-byte-per-cell tier bitmask (bit 0=Tier1 … bit 4=
     /// Unique on Byte packing; Unique is never set on Nibble).
@@ -630,33 +760,111 @@ fn pack_nibble_plane(plane: &[u8]) -> Vec<u8> {
     out
 }
 
-fn parse_areaflags(path: &Path) -> anyhow::Result<Vec<CeZoneOverlay>> {
+fn parse_areaflags(
+    path: &Path,
+    usage_names: &[String],
+) -> anyhow::Result<Vec<CeZoneOverlay>> {
     let af = AreaflagsFile::load(path)?;
+    let w = af.fine_w as usize;
+    let h = af.fine_h as usize;
+    let cell_count = af.cell_count();
     let mut overlays = Vec::new();
     for tier_idx in 0u8..5 {
         let mask = 1u8 << tier_idx;
-        let (png, coverage) = encode_tier_png(
+        if let Some(o) = overlay_from_plane(
             &af.tier_plane,
-            af.fine_w as usize,
-            af.fine_h as usize,
+            w,
+            h,
             mask,
+            tier_name(tier_idx).into(),
             tier_color(tier_idx),
-        )?;
-        if coverage <= 0.0 {
+            CeZoneKind::Tier,
+        )? {
+            overlays.push(o);
+        }
+    }
+    let mut extracted: [Option<Vec<u8>>; 4] = Default::default();
+    for (bit, name) in usage_names.iter().enumerate() {
+        if bit >= 32 || name.is_empty() {
             continue;
         }
-        let data_url = format!(
-            "data:image/png;base64,{}",
-            BASE64_STANDARD.encode(&png)
-        );
-        overlays.push(CeZoneOverlay {
-            name: tier_name(tier_idx).into(),
-            color: tier_color(tier_idx).into(),
-            coverage,
-            png_data_url: data_url,
-        });
+        let plane_i = bit / 8;
+        if extracted[plane_i].is_none() {
+            extracted[plane_i] = Some(extract_usage_plane_bip(
+                &af.usage_planes,
+                cell_count,
+                plane_i,
+            ));
+        }
+        let plane = extracted[plane_i].as_ref().unwrap();
+        let mask = 1u8 << (bit % 8);
+        if let Some(o) = overlay_from_plane(
+            plane,
+            w,
+            h,
+            mask,
+            name.clone(),
+            usage_color(name),
+            CeZoneKind::Usage,
+        )? {
+            overlays.push(o);
+        }
     }
     Ok(overlays)
+}
+
+/// Pull one of the four usage bytes into a `W×H` plane so the PNG
+/// encoder can treat it like the tier raster. On-disk usage is BIP
+/// (4 bytes/cell); treating those bytes as planar bands draws the
+/// paint in the wrong place.
+fn extract_usage_plane_bip(usage: &[u8], cell_count: usize, plane: usize) -> Vec<u8> {
+    let mut out = vec![0u8; cell_count];
+    let mut src = plane;
+    for dst in &mut out {
+        if src < usage.len() {
+            *dst = usage[src];
+        }
+        src += 4;
+    }
+    out
+}
+
+fn overlay_from_plane(
+    plane: &[u8],
+    w: usize,
+    h: usize,
+    mask: u8,
+    name: String,
+    color: &str,
+    kind: CeZoneKind,
+) -> anyhow::Result<Option<CeZoneOverlay>> {
+    if !plane.iter().any(|&b| b & mask != 0) {
+        return Ok(None);
+    }
+    let (png, coverage) = encode_tier_png(plane, w, h, mask, color)?;
+    if coverage <= 0.0 {
+        return Ok(None);
+    }
+    Ok(Some(CeZoneOverlay {
+        name,
+        kind,
+        color: color.into(),
+        coverage,
+        png_data_url: format!(
+            "data:image/png;base64,{}",
+            BASE64_STANDARD.encode(&png)
+        ),
+    }))
+}
+
+fn load_usage_names(workspace: &Path, profile: &ServerProfile) -> Vec<String> {
+    let Ok(ctx) = MissionContext::resolve(workspace, profile) else {
+        return Vec::new();
+    };
+    match limits_mod::load(&ctx) {
+        Ok(def) => def.usageflags.into_iter().map(|u| u.name).collect(),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// Emit an RGBA PNG for one tier bit. Tile colours are the tint
@@ -758,7 +966,7 @@ mod tests {
         if !p.is_file() {
             return;
         }
-        let overlays = parse_areaflags(&p).expect("parse");
+        let overlays = parse_areaflags(&p, &[]).expect("parse");
         // Chernarus always has at least Tier1..Tier4 regions.
         let names: Vec<&str> =
             overlays.iter().map(|o| o.name.as_str()).collect();
@@ -1009,5 +1217,88 @@ mod tests {
             af.valid_tier_bits(),
         );
         assert!(err.is_err(), "Unique is not stored in Livonia packing");
+    }
+
+    /// Bit n of the usage planes is the nth `<usage>` name. Empty
+    /// names and bits with no cells painted must not emit overlays.
+    #[test]
+    fn usage_overlays_follow_declaration_order() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&4u32.to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&12800u32.to_le_bytes());
+        bytes.extend_from_slice(&12800u32.to_le_bytes());
+        bytes.extend_from_slice(&32u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        let mut planes = vec![0u8; 4 * 8];
+        // BIP: cell i occupies bytes [i*4, i*4+4).
+        planes[0] = 0b0000_0001; // cell 0, plane 0, bit 0 = Military
+        planes[4] = 0b0000_0100; // cell 1, plane 0, bit 2 = Medic
+        bytes.extend_from_slice(&planes);
+        bytes.extend_from_slice(&[0u8; 4]);
+
+        let tmp = tempfile::NamedTempFile::new().expect("tmpfile");
+        std::fs::write(tmp.path(), &bytes).expect("write fixture");
+
+        let names = vec![
+            "Military".into(),
+            "Police".into(),
+            "Medic".into(),
+        ];
+        let overlays = parse_areaflags(tmp.path(), &names).expect("parse");
+        let usages: Vec<&str> = overlays
+            .iter()
+            .filter(|o| o.kind == CeZoneKind::Usage)
+            .map(|o| o.name.as_str())
+            .collect();
+        assert_eq!(usages, vec!["Military", "Medic"]);
+        assert!(overlays.iter().all(|o| o.coverage > 0.0));
+    }
+
+    #[test]
+    fn usage_extracts_bip_not_planar() {
+        // Two cells, 4 bytes each. Planar would put both hits in
+        // the first four bytes and leave cell 1 empty.
+        let usage = vec![0x01, 0, 0, 0, 0x04, 0, 0, 0];
+        let p0 = extract_usage_plane_bip(&usage, 2, 0);
+        assert_eq!(p0, vec![0x01, 0x04]);
+    }
+
+    #[test]
+    fn usage_paint_ors_and_clears_one_bit() {
+        let mut planes = vec![0u8; 4 * 8];
+        UsageOverride::EditCells {
+            bit: 0,
+            cells: vec![UsageEditCell {
+                row: 0,
+                col: 0,
+                set: true,
+            }],
+        }
+        .apply(&mut planes, 4, 2)
+        .unwrap();
+        assert_eq!(planes[0], 0x01);
+        UsageOverride::EditCells {
+            bit: 2,
+            cells: vec![UsageEditCell {
+                row: 0,
+                col: 0,
+                set: true,
+            }],
+        }
+        .apply(&mut planes, 4, 2)
+        .unwrap();
+        assert_eq!(planes[0], 0x05, "Military + Medic share a cell");
+        UsageOverride::EditCells {
+            bit: 0,
+            cells: vec![UsageEditCell {
+                row: 0,
+                col: 0,
+                set: false,
+            }],
+        }
+        .apply(&mut planes, 4, 2)
+        .unwrap();
+        assert_eq!(planes[0], 0x04, "erase Military keeps Medic");
     }
 }

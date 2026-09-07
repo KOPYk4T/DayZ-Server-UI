@@ -14,10 +14,10 @@ interface Props {
   mapId: MapId;
 }
 
-/** Renders CE tier overlays as semi-transparent raster layers on
- *  the Leaflet canvas. The backend parses `areaflags.map` and hands
- *  us one pre-tinted PNG per tier level (Tier1..Tier4 + Unique) as
- *  a base64 data URL — we just stack them.
+/** Renders CE tier / usage overlays as semi-transparent raster
+ *  layers on the Leaflet canvas. The backend parses `areaflags.map`
+ *  and hands us one pre-tinted PNG per mask as a base64 data URL —
+ *  we just stack the ones currently enabled.
  *
  *  `interactive={false}` lets clicks fall through to the markers
  *  underneath. These overlays are a display-only aid; they should

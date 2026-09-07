@@ -53,11 +53,19 @@ export interface TerritoriesLayerState {
 
 export interface CeZonesLayerState {
   enabled: boolean;
-  /** Per-zone visibility. Absent key = visible (so new tier/usage
-   *  masks show up automatically when a mod drops in a new PNG). */
+  /** Per-zone visibility override. Absent key: tiers are visible,
+   *  usages are hidden (too many layers to dump on by default). */
   hiddenZones: Record<string, boolean>;
   /** Shared across all enabled zone overlays, 0..1. */
   opacity: number;
+}
+
+export function isCeZoneHidden(
+  overlay: { name: string; kind?: "tier" | "usage" },
+  hiddenZones: Record<string, boolean>,
+): boolean {
+  if (Object.hasOwn(hiddenZones, overlay.name)) return hiddenZones[overlay.name];
+  return overlay.kind === "usage";
 }
 
 export interface LayersState {

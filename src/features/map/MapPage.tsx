@@ -28,6 +28,7 @@ import {
   MapPin,
   PawPrint,
   Plus,
+  Redo2,
   RefreshCw,
   Save,
   Settings,
@@ -110,13 +111,18 @@ import { useFlyToEvent, useFlyToSpawn } from "./flyTo";
 import { nearestBuildingY, nearestPositionY } from "./nearestY";
 import {
   colorForTerritoryCategory,
+  colorForUsage,
   EVENT_SPAWN_COLOR,
+  hexToRgb,
   PLAYER_SPAWN_COLORS,
   USAGE_COLORS,
   USAGE_PRIORITY,
 } from "./layerColors";
 import { CeZonesLayer } from "./CeZonesLayer";
-import { TierPaintLayer } from "./TierPaintLayer";
+import {
+  TierPaintLayer,
+  type PaintStrokeDelta,
+} from "./TierPaintLayer";
 import { PlayerSpawnsLayer } from "./PlayerSpawnsLayer";
 import {
   TerritoriesLayer,
@@ -129,7 +135,7 @@ import type {
   PlayerSpawnKind,
   SpawnSelection,
 } from "./types";
-import { DEFAULT_LAYERS } from "./types";
+import { DEFAULT_LAYERS, isCeZoneHidden } from "./types";
 
 // ---------- Page ----------
 
@@ -227,10 +233,11 @@ export function MapPage() {
     const s = new Set<string>();
     if (!layers.ceZones.enabled) return s;
     for (const o of ceZoneOverlays) {
-      if (!layers.ceZones.hiddenZones[o.name]) s.add(o.name);
+      if (!isCeZoneHidden(o, layers.ceZones.hiddenZones)) s.add(o.name);
     }
     return s;
   }, [ceZoneOverlays, layers.ceZones.enabled, layers.ceZones.hiddenZones]);
+  const ceUsageNames = ceZonesQuery.data?.usageNames ?? [];
   const [izurviveOpen, setIzurviveOpen] = useState(false);
   // Backdrop wizard / settings modal — replaces the previous
   // sidebar Map-settings panel. Auto-opens semantically via the
@@ -348,20 +355,97 @@ export function MapPage() {
   // Pending per-cell tier edits, keyed by `row * 4096 + col`. Lives in
   // a ref so brush strokes don't re-render the rest of the page;
   // `paintEditCount` is bumped whenever the ref changes so the
-  // panel's "Save (N cells)" label stays accurate.
+  // panel's pending-cell count stays accurate.
   const paintEditsRef = useRef<Map<number, number>>(new Map());
   const [paintEditCount, setPaintEditCount] = useState(0);
+  const [paintSaving, setPaintSaving] = useState(false);
   // True while the painter is mid-commit on a large stroke. Surfaced
-  // to the CE panel's status footer so the operator sees
-  // "Saving stroke…" instead of a UI hang during the cell-expand
-  // pass that runs on mouseup.
+  // to a map banner so the operator sees "Applying stroke…"
+  // instead of a UI hang during the cell-expand pass on mouseup.
   const [paintCommitting, setPaintCommitting] = useState(false);
   const [paintActive, setPaintActive] = useState(false);
   // Default brush is Tier1 (green) at 100 m — matches the smallest
   // useful editable area on Chernarus (~one CE coarse cell ≈ 256 m).
   const [paintTier, setPaintTier] = useState(0);
+  const [paintTarget, setPaintTarget] = useState<"tier" | "usage">("tier");
+  const [paintUsageBit, setPaintUsageBit] = useState(0);
+  const paintPreviewRgb = useMemo((): [number, number, number] | undefined => {
+    if (paintTarget !== "usage") return undefined;
+    return hexToRgb(colorForUsage(ceUsageNames[paintUsageBit] ?? null));
+  }, [paintTarget, paintUsageBit, ceUsageNames]);
   const [brushRadiusM, setBrushRadiusM] = useState(100);
   const [paintMode, setPaintMode] = useState<"set" | "erase">("set");
+  const [paintStampReady, setPaintStampReady] = useState(false);
+  const paintUndoStackRef = useRef<PaintStrokeDelta[]>([]);
+  const paintRedoStackRef = useRef<PaintStrokeDelta[]>([]);
+  const [paintUndoDepth, setPaintUndoDepth] = useState(0);
+  const [paintRedoDepth, setPaintRedoDepth] = useState(0);
+
+  const clearPaintHistory = () => {
+    paintUndoStackRef.current = [];
+    paintRedoStackRef.current = [];
+    setPaintUndoDepth(0);
+    setPaintRedoDepth(0);
+  };
+
+  const applyPaintDelta = useCallback(
+    (delta: PaintStrokeDelta, direction: "undo" | "redo") => {
+      delta.forEach((change, key) => {
+        const value = direction === "undo" ? change.prev : change.next;
+        if (value === undefined) paintEditsRef.current.delete(key);
+        else paintEditsRef.current.set(key, value);
+      });
+      setPaintEditCount(paintEditsRef.current.size);
+    },
+    [],
+  );
+
+  const undoPaintStroke = useCallback(() => {
+    const delta = paintUndoStackRef.current.pop();
+    if (!delta) return;
+    applyPaintDelta(delta, "undo");
+    paintRedoStackRef.current.push(delta);
+    setPaintUndoDepth(paintUndoStackRef.current.length);
+    setPaintRedoDepth(paintRedoStackRef.current.length);
+  }, [applyPaintDelta]);
+
+  const redoPaintStroke = useCallback(() => {
+    const delta = paintRedoStackRef.current.pop();
+    if (!delta) return;
+    applyPaintDelta(delta, "redo");
+    paintUndoStackRef.current.push(delta);
+    setPaintUndoDepth(paintUndoStackRef.current.length);
+    setPaintRedoDepth(paintRedoStackRef.current.length);
+  }, [applyPaintDelta]);
+
+  const paintStampOverlays = useMemo(() => {
+    return ceZoneOverlays.filter((o) => {
+      if (!ceZoneEnabled.has(o.name)) return false;
+      if (paintTarget === "tier") return o.kind !== "usage";
+      return o.kind === "usage" && o.name === ceUsageNames[paintUsageBit];
+    });
+  }, [
+    ceZoneOverlays,
+    ceZoneEnabled,
+    paintTarget,
+    paintUsageBit,
+    ceUsageNames,
+  ]);
+
+  const paintPreviewLive = paintActive || paintEditCount > 0;
+  useEffect(() => {
+    if (!paintPreviewLive) setPaintStampReady(false);
+  }, [paintPreviewLive]);
+  const leafletOverlays = useMemo(() => {
+    if (!paintPreviewLive || !paintStampReady) return ceZoneOverlays;
+    const hide = new Set(paintStampOverlays.map((o) => o.name));
+    return ceZoneOverlays.filter((o) => !hide.has(o.name));
+  }, [
+    paintPreviewLive,
+    paintStampReady,
+    paintStampOverlays,
+    ceZoneOverlays,
+  ]);
   useEffect(() => {
     if (!territoriesQuery.data) return;
     const incoming = territoriesQuery.data.files;
@@ -445,15 +529,21 @@ export function MapPage() {
     );
   }, [environmentDraft, territoriesQuery.data]);
 
+  const ceZonesDirty = paintEditCount > 0;
   const anyDirty =
-    spawnsDirty || eventsDirty || territoriesDirty || environmentDirty;
+    spawnsDirty ||
+    eventsDirty ||
+    territoriesDirty ||
+    environmentDirty ||
+    ceZonesDirty;
   const savePending =
     updateSpawns.isPending ||
     upsertEvents.isPending ||
     updateTerritory.isPending ||
     updateCfgEnvironment.isPending ||
     addAnimal.isPending ||
-    removeAnimal.isPending;
+    removeAnimal.isPending ||
+    paintSaving;
 
   // Deep-link parsing.
   useEffect(() => {
@@ -516,7 +606,32 @@ export function MapPage() {
           return;
         }
       }
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const ctrl = e.metaKey || e.ctrlKey;
+      if (ctrl && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        if (e.shiftKey) redoPaintStroke();
+        else undoPaintStroke();
+        return;
+      }
+      if (ctrl && (e.key === "y" || e.key === "Y")) {
+        e.preventDefault();
+        redoPaintStroke();
+        return;
+      }
+      if (ctrl || e.altKey) return;
+
+      if (e.key === "e" || e.key === "E") {
+        setPaintMode((m) => (m === "erase" ? "set" : "erase"));
+        return;
+      }
+      if (e.key === "[") {
+        setBrushRadiusM((r) => Math.min(1000, Math.max(25, r - 25)));
+        return;
+      }
+      if (e.key === "]") {
+        setBrushRadiusM((r) => Math.min(1000, Math.max(25, r + 25)));
+        return;
+      }
 
       if (e.key === "1") {
         setLayers((prev) => ({
@@ -569,7 +684,7 @@ export function MapPage() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [setLayers]);
+  }, [setLayers, undoPaintStroke, redoPaintStroke]);
 
   if (!activeProfile) {
     return (
@@ -725,6 +840,78 @@ export function MapPage() {
         onError: (err) => toast.error(errorMessage(err)),
       });
     }
+    if (paintEditsRef.current.size > 0) {
+      void flushCePaint();
+    }
+  };
+
+  const flushCePaint = async () => {
+    if (!activeProfile || paintEditsRef.current.size === 0) return;
+    setPaintSaving(true);
+    try {
+      if (paintTarget === "usage") {
+        const cells: { row: number; col: number; set: boolean }[] = [];
+        paintEditsRef.current.forEach((bits, key) => {
+          cells.push({
+            row: Math.floor(key / 4096),
+            col: key % 4096,
+            set: bits !== 0,
+          });
+        });
+        if (cells.length === 0) return;
+        const name = ceUsageNames[paintUsageBit];
+        const r = await tauri.ceZonesWriteOverride(
+          activeProfile.id,
+          null,
+          { kind: "editCells", bit: paintUsageBit, cells },
+        );
+        paintEditsRef.current.clear();
+        setPaintEditCount(0);
+        clearPaintHistory();
+        if (name) {
+          setLayers((prev) => ({
+            ...prev,
+            ceZones: {
+              ...prev.ceZones,
+              hiddenZones: {
+                ...prev.ceZones.hiddenZones,
+                [name]: false,
+              },
+            },
+          }));
+        }
+        toast.success(
+          `areaflags.map saved · ${r.usageOverrideSummary ?? "usage edits"}`,
+          { description: r.path, duration: 12_000 },
+        );
+      } else {
+        const cells: { row: number; col: number; bits: number }[] = [];
+        paintEditsRef.current.forEach((bits, key) => {
+          cells.push({
+            row: Math.floor(key / 4096),
+            col: key % 4096,
+            bits,
+          });
+        });
+        if (cells.length === 0) return;
+        const r = await tauri.ceZonesWriteOverride(activeProfile.id, {
+          kind: "editCells",
+          cells,
+        });
+        paintEditsRef.current.clear();
+        setPaintEditCount(0);
+        clearPaintHistory();
+        toast.success(
+          `areaflags.map saved · ${r.tierOverrideSummary ?? "edits"}`,
+          { description: r.path, duration: 12_000 },
+        );
+      }
+      void ceZonesQuery.refetch();
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      setPaintSaving(false);
+    }
   };
 
   const revert = () => {
@@ -735,6 +922,9 @@ export function MapPage() {
       setEnvironmentDraft(territoriesQuery.data.environment);
     }
     setSelectedTerritory(null);
+    paintEditsRef.current.clear();
+    setPaintEditCount(0);
+    clearPaintHistory();
   };
 
   // ---------- Territory zone mutators ----------
@@ -1088,6 +1278,15 @@ export function MapPage() {
                 unsaved events
               </Badge>
             ) : null}
+            {ceZonesDirty ? (
+              <Badge
+                variant="outline"
+                className="border-primary/40 text-primary"
+                title="Painted CE cells not written to areaflags.map yet"
+              >
+                unsaved CE zones
+              </Badge>
+            ) : null}
           </>
         }
         actions={
@@ -1335,45 +1534,23 @@ export function MapPage() {
               }}
               paintActive={paintActive}
               setPaintActive={setPaintActive}
+              paintTarget={paintTarget}
+              setPaintTarget={setPaintTarget}
               paintTier={paintTier}
               setPaintTier={setPaintTier}
+              paintUsageBit={paintUsageBit}
+              setPaintUsageBit={setPaintUsageBit}
+              usageNames={ceUsageNames}
               brushRadiusM={brushRadiusM}
               setBrushRadiusM={setBrushRadiusM}
               paintMode={paintMode}
               setPaintMode={setPaintMode}
               editCount={paintEditCount}
-              committing={paintCommitting}
-              onDiscardEdits={() => {
-                paintEditsRef.current.clear();
-                setPaintEditCount(0);
-              }}
-              onSaveEdits={async () => {
-                if (!activeProfile) return;
-                const cells: { row: number; col: number; bits: number }[] = [];
-                paintEditsRef.current.forEach((bits, key) => {
-                  cells.push({
-                    row: Math.floor(key / 4096),
-                    col: key % 4096,
-                    bits,
-                  });
-                });
-                if (cells.length === 0) return;
-                try {
-                  const r = await tauri.ceZonesWriteOverride(activeProfile.id, {
-                    kind: "editCells",
-                    cells,
-                  });
-                  paintEditsRef.current.clear();
-                  setPaintEditCount(0);
-                  toast.success(
-                    `Wrote areaflags.map · ${r.tierOverrideSummary ?? "edits"} · ${Math.round(r.bytes / 1024)} KB`,
-                    { description: r.path, duration: 12_000 },
-                  );
-                  void ceZonesQuery.refetch();
-                } catch (e) {
-                  toast.error(errorMessage(e));
-                }
-              }}
+              committing={paintCommitting || paintSaving}
+              undoDepth={paintUndoDepth}
+              redoDepth={paintRedoDepth}
+              onUndoStroke={undoPaintStroke}
+              onRedoStroke={redoPaintStroke}
             />
           </CollapsibleSection>
 
@@ -1498,24 +1675,35 @@ export function MapPage() {
               />
             ) : null}
             <CeZonesLayer
-              overlays={ceZoneOverlays}
+              overlays={leafletOverlays}
               enabled={ceZoneEnabled}
               opacity={layers.ceZones.opacity}
               mapId={mapId}
             />
-            {layers.ceZones.enabled && (paintActive || paintEditCount > 0) ? (
+            {layers.ceZones.enabled && paintPreviewLive ? (
               <TierPaintLayer
                 mapId={mapId}
                 active={paintActive}
                 paintTier={paintTier}
+                previewRgb={paintPreviewRgb}
                 brushRadiusM={brushRadiusM}
                 mode={paintMode}
                 editsRef={paintEditsRef}
                 editCount={paintEditCount}
-                onEditsChanged={() =>
-                  setPaintEditCount(paintEditsRef.current.size)
-                }
+                onStrokeCommitted={(delta) => {
+                  paintUndoStackRef.current.push(delta);
+                  if (paintUndoStackRef.current.length > 40) {
+                    paintUndoStackRef.current.shift();
+                  }
+                  paintRedoStackRef.current = [];
+                  setPaintUndoDepth(paintUndoStackRef.current.length);
+                  setPaintRedoDepth(0);
+                  setPaintEditCount(paintEditsRef.current.size);
+                }}
                 onCommittingChange={setPaintCommitting}
+                stampOverlays={paintStampOverlays}
+                stampOpacity={layers.ceZones.opacity}
+                onStampReady={setPaintStampReady}
               />
             ) : null}
             <BuildingPlacementsLayer
@@ -1620,7 +1808,7 @@ export function MapPage() {
             <div className="pointer-events-none absolute top-2 left-1/2 z-[1100] -translate-x-1/2 rounded-md border border-primary/40 bg-background/95 px-3 py-1.5 text-xs shadow-md">
               <span className="flex items-center gap-2 font-medium text-primary">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Saving paint stroke…
+                Applying stroke…
               </span>
             </div>
           ) : null}
@@ -1761,6 +1949,10 @@ function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
     { keys: "4", action: "Toggle territories layer" },
     { keys: "5", action: "Toggle CE zone masks" },
     { keys: "Esc", action: "Cancel add-mode, alignment, or zone selection" },
+    { keys: "E", action: "Toggle CE paint / erase" },
+    { keys: "[ / ]", action: "Smaller / larger CE brush" },
+    { keys: "Alt + drag", action: "Erase while painting" },
+    { keys: "Ctrl+Z / Y", action: "Undo / redo last paint stroke" },
     { keys: "? / /", action: "Toggle this help" },
     { keys: "+ / −", action: "Zoom in / out (Leaflet native)" },
     { keys: "Arrow keys", action: "Pan the map (Leaflet native)" },
@@ -3074,11 +3266,53 @@ const TIER_OPTIONS: { value: number; label: string }[] = [
 type EditAction = "passthrough" | "fillTier" | "clearTier" | "reassignTier";
 
 const EDIT_ACTION_LABELS: Record<EditAction, string> = {
-  passthrough: "Pass-through copy (no changes)",
-  fillTier: "Fill a tier across every land cell",
-  clearTier: "Clear a tier everywhere",
-  reassignTier: "Reassign one tier to another",
+  passthrough: "Copy vanilla into Workspace (no edits)",
+  fillTier: "Fill every land cell with one tier",
+  clearTier: "Remove one tier from the whole map",
+  reassignTier: "Swap one tier for another everywhere",
 };
+
+function CeZoneOverlayToggles({
+  overlays,
+  hiddenZones,
+  onToggle,
+}: {
+  overlays: CeZoneOverlay[];
+  hiddenZones: Record<string, boolean>;
+  onToggle: (o: CeZoneOverlay) => void;
+}) {
+  if (overlays.length === 0) {
+    return (
+      <p className="text-[10px] text-muted-foreground">None painted.</p>
+    );
+  }
+  return (
+    <div className="space-y-0.5">
+      {overlays.map((o) => {
+        const hidden = isCeZoneHidden(o, hiddenZones);
+        return (
+          <label
+            key={o.name}
+            className="flex cursor-pointer items-center gap-2 rounded-sm px-1 py-0.5 text-xs hover:bg-muted/40"
+          >
+            <Checkbox
+              checked={!hidden}
+              onCheckedChange={() => onToggle(o)}
+            />
+            <span
+              className="inline-block h-3 w-3 rounded-sm border border-border/60"
+              style={{ backgroundColor: o.color }}
+            />
+            <span className="flex-1">{o.name}</span>
+            <span className="font-mono text-[10px] text-muted-foreground">
+              {(o.coverage * 100).toFixed(1)}%
+            </span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
 
 function CeZonesPanel({
   overlays,
@@ -3094,16 +3328,23 @@ function CeZonesPanel({
   onAfterWrite,
   paintActive,
   setPaintActive,
+  paintTarget,
+  setPaintTarget,
   paintTier,
   setPaintTier,
+  paintUsageBit,
+  setPaintUsageBit,
+  usageNames,
   brushRadiusM,
   setBrushRadiusM,
   paintMode,
   setPaintMode,
   editCount,
   committing,
-  onSaveEdits,
-  onDiscardEdits,
+  undoDepth,
+  redoDepth,
+  onUndoStroke,
+  onRedoStroke,
 }: {
   overlays: CeZoneOverlay[];
   atlasNote: string | null;
@@ -3118,19 +3359,26 @@ function CeZonesPanel({
   onAfterWrite: () => void;
   paintActive: boolean;
   setPaintActive: (v: boolean) => void;
+  paintTarget: "tier" | "usage";
+  setPaintTarget: (v: "tier" | "usage") => void;
   paintTier: number;
   setPaintTier: (v: number) => void;
+  paintUsageBit: number;
+  setPaintUsageBit: (v: number) => void;
+  usageNames: string[];
   brushRadiusM: number;
   setBrushRadiusM: (v: number) => void;
   paintMode: "set" | "erase";
   setPaintMode: (v: "set" | "erase") => void;
   editCount: number;
   committing: boolean;
-  onSaveEdits: () => Promise<void>;
-  onDiscardEdits: () => void;
+  undoDepth: number;
+  redoDepth: number;
+  onUndoStroke: () => void;
+  onRedoStroke: () => void;
 }) {
   const [writing, setWriting] = useState(false);
-  const [action, setAction] = useState<EditAction>("passthrough");
+  const [action, setAction] = useState<EditAction>("fillTier");
   const [tier, setTier] = useState<number>(3);
   const [reassignFrom, setReassignFrom] = useState<number>(0);
   const [reassignTo, setReassignTo] = useState<number>(3);
@@ -3176,7 +3424,7 @@ function CeZonesPanel({
         sourceWas: r.sourceWas,
         summary: r.tierOverrideSummary,
       });
-      const label = r.tierOverrideSummary ?? "pass-through copy";
+      const label = r.tierOverrideSummary ?? "copied unchanged";
       toast.success(
         `Wrote areaflags.map · ${label} · ${Math.round(r.bytes / 1024)} KB`,
         {
@@ -3227,46 +3475,52 @@ function CeZonesPanel({
     );
   }
 
-  const toggleZone = (name: string) => {
+  const toggleZone = (o: CeZoneOverlay) => {
+    const hidden = isCeZoneHidden(o, state.hiddenZones);
     onStateChange({
       ...state,
       hiddenZones: {
         ...state.hiddenZones,
-        [name]: !state.hiddenZones[name],
+        [o.name]: !hidden,
       },
     });
   };
 
+  const tiers = overlays.filter((o) => o.kind !== "usage");
+  const usages = overlays.filter((o) => o.kind === "usage");
+
   return (
     <div className="space-y-2">
       <p className="text-[11px] text-muted-foreground">
-        Loot tiers parsed from this mission's <code>areaflags.map</code>.
-        Tier1 is starter loot; higher tiers are inland / military.
+        Loot tiers and painted usage from this mission's{" "}
+        <code>areaflags.map</code>. Usage names come from{" "}
+        <code>cfglimitsdefinition.xml</code>. Tier1 is starter loot;
+        higher tiers are inland / military.
       </p>
-      <div className="space-y-0.5">
-        {overlays.map((o) => {
-          const hidden = !!state.hiddenZones[o.name];
-          return (
-            <label
-              key={o.name}
-              className="flex cursor-pointer items-center gap-2 rounded-sm px-1 py-0.5 text-xs hover:bg-muted/40"
-            >
-              <Checkbox
-                checked={!hidden}
-                onCheckedChange={() => toggleZone(o.name)}
-              />
-              <span
-                className="inline-block h-3 w-3 rounded-sm border border-border/60"
-                style={{ backgroundColor: o.color }}
-              />
-              <span className="flex-1">{o.name}</span>
-              <span className="font-mono text-[10px] text-muted-foreground">
-                {(o.coverage * 100).toFixed(1)}%
-              </span>
-            </label>
-          );
-        })}
-      </div>
+      <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
+        Tiers
+      </p>
+      <CeZoneOverlayToggles
+        overlays={tiers}
+        hiddenZones={state.hiddenZones}
+        onToggle={toggleZone}
+      />
+      {usages.length > 0 ? (
+        <>
+          <p className="pt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+            Usage
+          </p>
+          <p className="text-[10px] leading-snug text-muted-foreground">
+            Economy Editor paints these (Military, Medic, …). Off
+            until you turn one on.
+          </p>
+          <CeZoneOverlayToggles
+            overlays={usages}
+            hiddenZones={state.hiddenZones}
+            onToggle={toggleZone}
+          />
+        </>
+      ) : null}
       <div className="space-y-1 pt-1">
         <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
           Opacity {Math.round(state.opacity * 100)}%
@@ -3288,21 +3542,23 @@ function CeZonesPanel({
       </div>
       <div className="space-y-1 rounded-md border border-dashed border-border/60 p-2">
         <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-          Write to mission folder
+          Whole-map tier tools
         </p>
         <p className="text-[10px] leading-snug text-muted-foreground">
-          Saves <code>areaflags.map</code> directly into this
-          profile's mission folder. DayZ reads that file at boot in
-          preference to the vanilla copy, so changes take effect
-          after a Push + server restart — no PBO packaging required.
+          Optional. These rewrite the <em>entire</em> map at once
+          (fill / strip / swap a tier) and write Workspace
+          immediately — they are not a draft. Save or Revert
+          pending paint first; otherwise this ignores those
+          strokes. Still Workspace only; Copy to Local when you
+          want to test.
         </p>
         <p className="text-[10px] leading-snug text-muted-foreground">
-          Source:{" "}
+          Reading from:{" "}
           <span className="font-mono text-foreground">
             {atlasSource === "mission"
-              ? "mission override (already deployed)"
+              ? "Workspace (already in this profile)"
               : atlasSource === "vanilla"
-                ? "vanilla (P: drive) — writing will create the first override"
+                ? "vanilla on P: — first save creates the Workspace copy"
                 : "unavailable"}
           </span>
           {atlasSourcePath ? (
@@ -3321,7 +3577,12 @@ function CeZonesPanel({
             className="w-full rounded border border-border bg-background/60 px-2 py-1 text-xs"
             disabled={writing}
           >
-            {(Object.keys(EDIT_ACTION_LABELS) as EditAction[]).map((k) => (
+            {(
+              (atlasSource === "vanilla"
+                ? (["passthrough", "fillTier", "clearTier", "reassignTier"] as const)
+                : (["fillTier", "clearTier", "reassignTier"] as const)
+              ) as EditAction[]
+            ).map((k) => (
               <option key={k} value={k}>
                 {EDIT_ACTION_LABELS[k]}
               </option>
@@ -3396,14 +3657,21 @@ function CeZonesPanel({
           variant="secondary"
           className="w-full"
           onClick={() => void runWrite()}
-          disabled={writing || !profileId || reassignSelfNoop}
+          disabled={
+            writing || !profileId || reassignSelfNoop || editCount > 0
+          }
+          title={
+            editCount > 0
+              ? "Save or Revert pending paint in the page header first"
+              : undefined
+          }
         >
           {writing ? (
             <>
               <Loader2 className="mr-2 h-3 w-3 animate-spin" /> Writing…
             </>
           ) : (
-            "Write to mission folder"
+            "Save to Workspace"
           )}
         </Button>
         {lastWrite ? (
@@ -3427,7 +3695,7 @@ function CeZonesPanel({
             <div>
               applied:{" "}
               <span className="text-foreground">
-                {lastWrite.summary ?? "pass-through copy"}
+                {lastWrite.summary ?? "copied unchanged"}
               </span>
             </div>
             <div>
@@ -3439,16 +3707,23 @@ function CeZonesPanel({
       <CeZonePainterControls
         paintActive={paintActive}
         setPaintActive={setPaintActive}
+        paintTarget={paintTarget}
+        setPaintTarget={setPaintTarget}
         paintTier={paintTier}
         setPaintTier={setPaintTier}
+        paintUsageBit={paintUsageBit}
+        setPaintUsageBit={setPaintUsageBit}
+        usageNames={usageNames}
         brushRadiusM={brushRadiusM}
         setBrushRadiusM={setBrushRadiusM}
         paintMode={paintMode}
         setPaintMode={setPaintMode}
         editCount={editCount}
         committing={committing}
-        onSaveEdits={onSaveEdits}
-        onDiscardEdits={onDiscardEdits}
+        undoDepth={undoDepth}
+        redoDepth={redoDepth}
+        onUndoStroke={onUndoStroke}
+        onRedoStroke={onRedoStroke}
         layerEnabled={state.enabled}
       />
     </div>
@@ -3463,38 +3738,51 @@ function CeZonesPanel({
 function CeZonePainterControls({
   paintActive,
   setPaintActive,
+  paintTarget,
+  setPaintTarget,
   paintTier,
   setPaintTier,
+  paintUsageBit,
+  setPaintUsageBit,
+  usageNames,
   brushRadiusM,
   setBrushRadiusM,
   paintMode,
   setPaintMode,
   editCount,
   committing,
-  onSaveEdits,
-  onDiscardEdits,
+  undoDepth,
+  redoDepth,
+  onUndoStroke,
+  onRedoStroke,
   layerEnabled,
 }: {
   paintActive: boolean;
   setPaintActive: (v: boolean) => void;
+  paintTarget: "tier" | "usage";
+  setPaintTarget: (v: "tier" | "usage") => void;
   paintTier: number;
   setPaintTier: (v: number) => void;
+  paintUsageBit: number;
+  setPaintUsageBit: (v: number) => void;
+  usageNames: string[];
   brushRadiusM: number;
   setBrushRadiusM: (v: number) => void;
   paintMode: "set" | "erase";
   setPaintMode: (v: "set" | "erase") => void;
   editCount: number;
   committing: boolean;
-  onSaveEdits: () => Promise<void>;
-  onDiscardEdits: () => void;
+  undoDepth: number;
+  redoDepth: number;
+  onUndoStroke: () => void;
+  onRedoStroke: () => void;
   layerEnabled: boolean;
 }) {
-  const [saving, setSaving] = useState(false);
   return (
     <div className="space-y-2 rounded-md border border-dashed border-border/60 p-2">
       <div className="flex items-center justify-between gap-2">
         <p className="text-[10px] uppercase tracking-wide text-muted-foreground">
-          Paint tiers
+          Paint
         </p>
         <Button
           type="button"
@@ -3507,11 +3795,52 @@ function CeZonePainterControls({
           {paintActive ? "Painting…" : "Start painting"}
         </Button>
       </div>
+      <p className="text-[10px] leading-snug text-muted-foreground">
+        Strokes stay a draft. Ctrl+Z / Ctrl+Y undo a stroke.
+        Save in the page header writes Workspace.
+      </p>
       {!layerEnabled ? (
         <p className="text-[10px] text-muted-foreground">
           Enable the CE zones layer (eye icon) to paint.
         </p>
       ) : null}
+      <div className="space-y-1">
+        <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
+          Target
+        </Label>
+        <div className="flex gap-1">
+          <button
+            type="button"
+            disabled={editCount > 0}
+            onClick={() => setPaintTarget("tier")}
+            className={`flex-1 rounded border px-2 py-1 text-[11px] ${
+              paintTarget === "tier"
+                ? "border-primary bg-primary/10 text-foreground"
+                : "border-border bg-background/60 text-muted-foreground"
+            }`}
+          >
+            Tiers
+          </button>
+          <button
+            type="button"
+            disabled={editCount > 0 || usageNames.length === 0}
+            onClick={() => setPaintTarget("usage")}
+            className={`flex-1 rounded border px-2 py-1 text-[11px] ${
+              paintTarget === "usage"
+                ? "border-primary bg-primary/10 text-foreground"
+                : "border-border bg-background/60 text-muted-foreground"
+            }`}
+          >
+            Usage
+          </button>
+        </div>
+        {editCount > 0 ? (
+          <p className="text-[10px] text-muted-foreground">
+            Save or Revert in the page header before switching
+            target.
+          </p>
+        ) : null}
+      </div>
       <div className="space-y-1">
         <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
           Brush
@@ -3526,7 +3855,7 @@ function CeZonePainterControls({
                 : "border-border bg-background/60 text-muted-foreground"
             }`}
           >
-            Set tier
+            {paintTarget === "usage" ? "Set usage" : "Set tier"}
           </button>
           <button
             type="button"
@@ -3540,8 +3869,14 @@ function CeZonePainterControls({
             Erase
           </button>
         </div>
+        <p className="text-[10px] leading-snug text-muted-foreground">
+          Erase punches a hole in the selected target only.
+          Usage is a different layer — hide it in the list if it
+          sits on top of your tiers. Hold Alt to erase, E to
+          toggle, [ ] for brush size.
+        </p>
       </div>
-      {paintMode === "set" ? (
+      {paintMode === "set" && paintTarget === "tier" ? (
         <div className="space-y-1">
           <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
             Tier to paint
@@ -3559,6 +3894,29 @@ function CeZonePainterControls({
           </select>
         </div>
       ) : null}
+      {paintTarget === "usage" ? (
+        <div className="space-y-1">
+          <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            {paintMode === "erase" ? "Usage to erase" : "Usage to paint"}
+          </Label>
+          <select
+            value={paintUsageBit}
+            disabled={editCount > 0}
+            onChange={(e) => setPaintUsageBit(Number(e.target.value))}
+            className="w-full rounded border border-border bg-background/60 px-2 py-1 text-xs"
+          >
+            {usageNames.map((name, bit) => (
+              <option key={name} value={bit}>
+                {name}
+              </option>
+            ))}
+          </select>
+          <p className="text-[10px] leading-snug text-muted-foreground">
+            Set adds this flag; erase removes only this flag. Other
+            usages on the same cell stay.
+          </p>
+        </div>
+      ) : null}
       <div className="space-y-1">
         <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
           Brush radius {brushRadiusM} m
@@ -3574,55 +3932,42 @@ function CeZonePainterControls({
         />
       </div>
       <div className="flex items-center justify-between gap-2 pt-1">
-        {/* Cell-count footer. The "Saving stroke…" indicator lives
-            as a floating banner over the map itself (see the
-            `paintCommitting` block in MapPage) so it's visible
-            without having to glance at the sidebar mid-stroke. The
-            Save / Discard buttons still disable on `committing` so
-            stale commits can't fire. */}
-        <span className="text-[10px] text-muted-foreground">
+        <p
+          className="text-[10px] text-muted-foreground"
+          title={
+            committing
+              ? "Waiting for the current stroke to finish committing"
+              : undefined
+          }
+        >
           {editCount === 0
             ? "No pending edits"
             : `${editCount.toLocaleString()} cell${editCount === 1 ? "" : "s"} pending`}
-        </span>
+        </p>
         <div className="flex gap-1">
           <Button
             type="button"
             size="sm"
             variant="ghost"
             className="h-6 px-2 text-[11px]"
-            disabled={editCount === 0 || saving || committing}
-            onClick={onDiscardEdits}
+            disabled={undoDepth === 0 || committing}
+            onClick={onUndoStroke}
+            title="Undo last stroke (Ctrl+Z)"
           >
-            Discard
+            <Undo2 className="mr-1 h-3 w-3" />
+            Undo
           </Button>
           <Button
             type="button"
             size="sm"
-            variant="secondary"
+            variant="ghost"
             className="h-6 px-2 text-[11px]"
-            disabled={editCount === 0 || saving || committing}
-            onClick={async () => {
-              setSaving(true);
-              try {
-                await onSaveEdits();
-              } finally {
-                setSaving(false);
-              }
-            }}
-            title={
-              committing
-                ? "Waiting for the current stroke to finish committing"
-                : undefined
-            }
+            disabled={redoDepth === 0 || committing}
+            onClick={onRedoStroke}
+            title="Redo stroke (Ctrl+Y)"
           >
-            {saving ? (
-              <>
-                <Loader2 className="mr-1 h-3 w-3 animate-spin" /> Saving…
-              </>
-            ) : (
-              "Save edits"
-            )}
+            <Redo2 className="mr-1 h-3 w-3" />
+            Redo
           </Button>
         </div>
       </div>
@@ -3639,7 +3984,8 @@ function LegendHint() {
         <li>Drag a marker to move it.</li>
         <li>Click a marker for details + remove.</li>
         <li>Only one add-mode is active at a time.</li>
-        <li>Save commits to both XML files at once.</li>
+        <li>Save in the header commits drafts (XML + painted CE zones).</li>
+        <li>Ctrl+Z undoes a CE paint stroke. Hold Alt to erase.</li>
       </ul>
     </div>
   );

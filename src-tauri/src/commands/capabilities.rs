@@ -464,7 +464,7 @@ fn build_game_data_tier(
     let ds_sign_step =
         tool_present_step("ds_sign", "DSSignFile",
             tools::ds_sign_file_exe_resolved(app_data_dir, tools_dir));
-    let signing_key_step = signing_key_step(tools_dir);
+    let signing_key_step = signing_key_step(app_data_dir, tools_dir);
 
     // Aggregate: tier is Ready when every gating row is Ready/Stale.
     // The work_dir row is excluded because it's convenience-only —
@@ -548,31 +548,19 @@ fn tool_present_step(
 
 /// Helper — `signing_key` row. Exposed so the same row state shows
 /// up wherever the tier-list wants to surface PBO signing health.
-fn signing_key_step(tools_dir: &std::path::Path) -> CapabilityStep {
-    let key_dir = tools_dir.join("DsUtils");
-    let key_present = std::fs::read_dir(&key_dir)
-        .map(|rd| {
-            rd.flatten().any(|e| {
-                e.path()
-                    .extension()
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.eq_ignore_ascii_case("biprivatekey"))
-                    .unwrap_or(false)
-            })
-        })
-        .unwrap_or(false);
-    CapabilityStep {
-        id: "signing_key".into(),
-        label: "Signing key".into(),
-        state: if key_present {
-            TierState::Ready
-        } else {
-            TierState::Warn
+fn signing_key_step(app_data_dir: &std::path::Path, tools_dir: &std::path::Path) -> CapabilityStep {
+    match tools::find_private_key(app_data_dir, tools_dir) {
+        Some(path) => CapabilityStep {
+            id: "signing_key".into(),
+            label: "Signing key".into(),
+            state: TierState::Ready,
+            detail: format!("Using {}", path.display()),
         },
-        detail: if key_present {
-            "`.biprivatekey` found in tools/DsUtils/.".into()
-        } else {
-            "No `.biprivatekey` — built PBOs won't be signed. verifySignatures=2 servers will reject them.".into()
+        None => CapabilityStep {
+            id: "signing_key".into(),
+            label: "Signing key".into(),
+            state: TierState::Warn,
+            detail: "No `.biprivatekey` next to DSSignFile (DayZ Tools) or in Setup. Built PBOs won't be signed; verifySignatures=2 servers will reject them.".into(),
         },
     }
 }
