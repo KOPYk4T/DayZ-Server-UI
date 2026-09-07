@@ -15,21 +15,28 @@
 //!   - **Write**: apply a `TierOverride` transform to the live
 //!     source and save to `<mission>/areaflags.map`.
 //!
-//! Format (reverse-engineered empirically — no official spec):
+//! Format (reverse-engineered empirically — no official spec).
+//! We read the mission copy the operator already has (pull / import);
+//! we do **not** fetch Bohemia's GitHub at runtime. Official
+//! `dayzOffline.*` missions ship the same bytes as
+//! BohemiaInteractive/DayZ-Central-Economy.
 //!
-//!   Offset 0   u32 LE  fine_width   (4096 on Chernarus)
+//!   Offset 0   u32 LE  fine_width   (4096 on Chernarus / Enoch / Sakhal)
 //!   Offset 4   u32 LE  fine_height  (4096)
-//!   Offset 8   u32 LE  coarse_width (60 — 256 m CE cells)
-//!   Offset 12  u32 LE  coarse_height(60)
+//!   Offset 8   u32 LE  coarse_width (Chernarus: 60 cells; Enoch: 12800
+//!                                   — world metres, not CE cells)
+//!   Offset 12  u32 LE  coarse_height (same units as coarse_width)
 //!   Offset 16  u32 LE  usage_bits   (32)
 //!   Offset 20  u32 LE  reserved     (0)
 //!   Offset 24  4 × (fine_width × fine_height) bytes  — usage bitmask
 //!                                                     planes (1 byte
 //!                                                     each, 4 bytes =
 //!                                                     32 bits per cell)
-//!   Offset 24+4*W*H  (fine_width × fine_height) bytes — tier bitmask
-//!                                                       plane, 1 byte
-//!                                                       per cell.
+//!   Then the tier plane, in one of two layouts:
+//!     Chernarus / Sakhal — 1 byte per cell (`W×H` bytes).
+//!     Livonia (Enoch)    — 2 cells per byte (`W×H/2` bytes), low
+//!                          nibble = even column. Only bits 0..=3
+//!                          (Tier1..Tier4); Unique is not stored.
 //!
 //! Tier plane byte layout:
 //!   bit 0 = Tier1, bit 1 = Tier2, bit 2 = Tier3, bit 3 = Tier4,
@@ -65,6 +72,10 @@ use crate::state::AppState;
 /// Leaflet canvas.
 const DOWNSAMPLE: usize = 2;
 const RASTER_DIM: u32 = 4096;
+/// Chernarus / Sakhal: bits 0..=4 (Tier1..Unique).
+const TIER_BITS_BYTE: u8 = 0b0001_1111;
+/// Livonia packed nibble: bits 0..=3 (Tier1..Tier4). Unique is absent.
+const TIER_BITS_NIBBLE: u8 = 0b0000_1111;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -165,17 +176,28 @@ pub struct TierEditCell {
 
 impl TierOverride {
     fn apply(&self, tier_plane: &mut [u8]) -> AppResult<()> {
-        fn validate_tier(name: &str, tier: u8) -> AppResult<u8> {
-            if tier > 4 {
+        self.apply_on(tier_plane, RASTER_DIM, RASTER_DIM, TIER_BITS_BYTE)
+    }
+
+    fn apply_on(
+        &self,
+        tier_plane: &mut [u8],
+        width: u32,
+        height: u32,
+        valid_bits: u8,
+    ) -> AppResult<()> {
+        let max_tier = valid_bits.trailing_ones().saturating_sub(1) as u8;
+        fn validate_tier(name: &str, tier: u8, max_tier: u8) -> AppResult<u8> {
+            if tier > max_tier {
                 return Err(AppError::Internal(format!(
-                    "tier index {tier} out of range for {name} (must be 0..=4)"
+                    "tier index {tier} out of range for {name} (must be 0..={max_tier})"
                 )));
             }
             Ok(1u8 << tier)
         }
         match self {
             TierOverride::FillTier { tier } => {
-                let set_mask = validate_tier("fillTier", *tier)?;
+                let set_mask = validate_tier("fillTier", *tier, max_tier)?;
                 for b in tier_plane.iter_mut() {
                     if *b != 0 {
                         *b = set_mask;
@@ -183,15 +205,15 @@ impl TierOverride {
                 }
             }
             TierOverride::ClearTier { tier } => {
-                let bit = validate_tier("clearTier", *tier)?;
+                let bit = validate_tier("clearTier", *tier, max_tier)?;
                 let clear = !bit;
                 for b in tier_plane.iter_mut() {
                     *b &= clear;
                 }
             }
             TierOverride::ReassignTier { from, to } => {
-                let from_mask = validate_tier("reassignTier.from", *from)?;
-                let to_mask = validate_tier("reassignTier.to", *to)?;
+                let from_mask = validate_tier("reassignTier.from", *from, max_tier)?;
+                let to_mask = validate_tier("reassignTier.to", *to, max_tier)?;
                 let clear_from = !from_mask;
                 for b in tier_plane.iter_mut() {
                     if *b & from_mask != 0 {
@@ -203,22 +225,21 @@ impl TierOverride {
                 // Validate everything up-front: any out-of-range row,
                 // col or bits aborts before we touch the plane so a
                 // bad payload can't leave the file half-written.
-                let valid_bits: u8 = 0b0001_1111; // Tier1..Unique only
                 for c in cells {
-                    if c.row >= RASTER_DIM || c.col >= RASTER_DIM {
+                    if c.row >= height || c.col >= width {
                         return Err(AppError::Internal(format!(
-                            "edit cell out of range: row={}, col={} (raster is {}×{})",
-                            c.row, c.col, RASTER_DIM, RASTER_DIM
+                            "edit cell out of range: row={}, col={} (raster is {width}×{height})",
+                            c.row, c.col
                         )));
                     }
                     if c.bits & !valid_bits != 0 {
                         return Err(AppError::Internal(format!(
-                            "edit cell has invalid bits {:#010b} at ({},{}) — only bits 0..=4 valid",
+                            "edit cell has invalid bits {:#010b} at ({},{}) — valid mask {valid_bits:#010b}",
                             c.bits, c.row, c.col
                         )));
                     }
                 }
-                let w = RASTER_DIM as usize;
+                let w = width as usize;
                 for c in cells {
                     let idx = (c.row as usize) * w + (c.col as usize);
                     tier_plane[idx] = c.bits;
@@ -387,7 +408,10 @@ pub async fn ce_zones_write_override(
         .map_err(|e| AppError::Internal(format!("load source: {e}")))?;
     let summary = match &tier_override {
         Some(op) => {
-            op.apply(&mut af.tier_plane)?;
+            let fine_w = af.fine_w;
+            let fine_h = af.fine_h;
+            let valid_bits = af.valid_tier_bits();
+            op.apply_on(&mut af.tier_plane, fine_w, fine_h, valid_bits)?;
             Some(op.summary())
         }
         None => None,
@@ -432,6 +456,16 @@ fn tier_name(idx: u8) -> &'static str {
     }
 }
 
+/// How the on-disk tier plane is packed. In memory `tier_plane` is
+/// always 1 byte per cell so the painter / PNG encoder stay simple.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TierPacking {
+    /// 1 byte per cell (Chernarus, Sakhal).
+    Byte,
+    /// 2 cells per byte, low nibble = even column (Livonia / Enoch).
+    Nibble,
+}
+
 /// Parsed `areaflags.map` split into its three logical chunks.
 /// Exposed so the build pipeline can substitute a modified tier
 /// plane without needing to re-derive the header or re-read the
@@ -442,12 +476,16 @@ pub(crate) struct AreaflagsFile {
     /// documented spec so "don't touch what you don't understand"
     /// is the safer default.
     pub header: [u8; 24],
-    /// 4 × plane_size bytes of usage bitmasks. Opaque to this
+    pub fine_w: u32,
+    pub fine_h: u32,
+    packing: TierPacking,
+    /// 4 × (fine_w × fine_h) bytes of usage bitmasks. Opaque to this
     /// module — usage bit decoding is deferred. When we write out
     /// a modified file these bytes flow through untouched so
     /// vanilla usage geometry is preserved.
     pub usage_planes: Vec<u8>,
-    /// plane_size bytes of tier bitmask (bit 0=Tier1 … bit 4=Unique).
+    /// Unpacked 1-byte-per-cell tier bitmask (bit 0=Tier1 … bit 4=
+    /// Unique on Byte packing; Unique is never set on Nibble).
     /// This is the plane the painter mutates.
     pub tier_plane: Vec<u8>,
 }
@@ -457,11 +495,21 @@ impl AreaflagsFile {
         (RASTER_DIM as usize) * (RASTER_DIM as usize)
     }
 
-    /// Parse the binary areaflags.map on disk. Validates the header
-    /// against our expected 4096×4096 Chernarus-style shape. Other
-    /// worlds (Enoch, Sakhal) ship the same dims; if that assumption
-    /// breaks on a future map, the clear error here is friendlier
-    /// than writing back a mis-sized file.
+    fn cell_count(&self) -> usize {
+        self.fine_w as usize * self.fine_h as usize
+    }
+
+    fn valid_tier_bits(&self) -> u8 {
+        match self.packing {
+            TierPacking::Byte => TIER_BITS_BYTE,
+            TierPacking::Nibble => TIER_BITS_NIBBLE,
+        }
+    }
+
+    /// Parse the binary areaflags.map on disk. Layout follows the
+    /// header's `fine_w`/`fine_h` plus the leftover size after the
+    /// four usage planes: a full `W×H` leftover is Chernarus/Sakhal;
+    /// a half leftover is Livonia's packed nibble plane.
     pub(crate) fn load(path: &Path) -> anyhow::Result<Self> {
         let bytes = std::fs::read(path)?;
         if bytes.len() < 24 {
@@ -469,60 +517,117 @@ impl AreaflagsFile {
         }
         let fine_w = u32::from_le_bytes(bytes[0..4].try_into().unwrap());
         let fine_h = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
-        if fine_w != RASTER_DIM || fine_h != RASTER_DIM {
+        if fine_w == 0 || fine_h == 0 || fine_w > 8192 || fine_h > 8192 {
             anyhow::bail!("unexpected raster dims: {fine_w}x{fine_h}");
         }
-        let plane_size = Self::plane_size();
-        let expected = 24 + 5 * plane_size;
-        if bytes.len() != expected {
+        let cell_count = fine_w as usize * fine_h as usize;
+        let usage_len = 4 * cell_count;
+        if bytes.len() < 24 + usage_len {
             anyhow::bail!(
-                "unexpected file size {} (expected {})",
-                bytes.len(),
-                expected
+                "file too small for {fine_w}×{fine_h} usage planes ({} bytes)",
+                bytes.len()
             );
         }
+        let rest = bytes.len() - 24 - usage_len;
+        let byte_size = 24 + usage_len + cell_count;
+        let nibble_size = 24 + usage_len + cell_count / 2;
+        let (packing, tier_plane) = if rest == cell_count {
+            (
+                TierPacking::Byte,
+                bytes[24 + usage_len..].to_vec(),
+            )
+        } else if rest == cell_count / 2 && fine_w % 2 == 0 {
+            (
+                TierPacking::Nibble,
+                unpack_nibble_plane(&bytes[24 + usage_len..], cell_count),
+            )
+        } else {
+            anyhow::bail!(
+                "unexpected file size {} for {fine_w}×{fine_h} header \
+                 (Chernarus/Sakhal = {byte_size} bytes, 1 byte/cell; \
+                 Livonia/Enoch = {nibble_size} bytes, packed 2 cells/byte)",
+                bytes.len()
+            );
+        };
         let mut header = [0u8; 24];
         header.copy_from_slice(&bytes[..24]);
-        let usage_planes = bytes[24..24 + 4 * plane_size].to_vec();
-        let tier_plane = bytes[24 + 4 * plane_size..].to_vec();
+        let usage_planes = bytes[24..24 + usage_len].to_vec();
         Ok(Self {
             header,
+            fine_w,
+            fine_h,
+            packing,
             usage_planes,
             tier_plane,
         })
     }
 
-    /// Serialise back to the 24 + 4·plane + 1·plane layout. Exposed
-    /// for round-trip tests; callers that want to write to disk
-    /// should use `write`.
+    /// Serialise back to the original on-disk packing. Exposed for
+    /// round-trip tests; callers that want to write to disk should
+    /// use `write`.
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
-        let plane_size = Self::plane_size();
-        let mut out = Vec::with_capacity(24 + 5 * plane_size);
+        let mut out =
+            Vec::with_capacity(24 + self.usage_planes.len() + self.tier_plane.len());
         out.extend_from_slice(&self.header);
         out.extend_from_slice(&self.usage_planes);
-        out.extend_from_slice(&self.tier_plane);
+        match self.packing {
+            TierPacking::Byte => out.extend_from_slice(&self.tier_plane),
+            TierPacking::Nibble => out.extend_from_slice(&pack_nibble_plane(&self.tier_plane)),
+        }
         out
     }
 
     pub(crate) fn write(&self, path: &Path) -> anyhow::Result<()> {
-        let plane_size = Self::plane_size();
-        if self.usage_planes.len() != 4 * plane_size {
+        let cells = self.cell_count();
+        if self.usage_planes.len() != 4 * cells {
             anyhow::bail!(
                 "usage_planes len {} ≠ expected {}",
                 self.usage_planes.len(),
-                4 * plane_size
+                4 * cells
             );
         }
-        if self.tier_plane.len() != plane_size {
+        if self.tier_plane.len() != cells {
             anyhow::bail!(
                 "tier_plane len {} ≠ expected {}",
                 self.tier_plane.len(),
-                plane_size
+                cells
             );
         }
         std::fs::write(path, self.to_bytes())?;
         Ok(())
     }
+}
+
+/// Low nibble = even column. Confirmed on official Livonia
+/// `areaflags.map` by fewer horizontal seams than the inverse.
+fn unpack_nibble_plane(packed: &[u8], cell_count: usize) -> Vec<u8> {
+    let mut out = vec![0u8; cell_count];
+    for (i, &b) in packed.iter().enumerate() {
+        let idx = i * 2;
+        if idx < cell_count {
+            out[idx] = b & 0x0F;
+        }
+        if idx + 1 < cell_count {
+            out[idx + 1] = (b >> 4) & 0x0F;
+        }
+    }
+    out
+}
+
+fn pack_nibble_plane(plane: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(plane.len().div_ceil(2));
+    let mut i = 0;
+    while i < plane.len() {
+        let lo = plane[i] & 0x0F;
+        let hi = if i + 1 < plane.len() {
+            plane[i + 1] & 0x0F
+        } else {
+            0
+        };
+        out.push(lo | (hi << 4));
+        i += 2;
+    }
+    out
 }
 
 fn parse_areaflags(path: &Path) -> anyhow::Result<Vec<CeZoneOverlay>> {
@@ -532,8 +637,8 @@ fn parse_areaflags(path: &Path) -> anyhow::Result<Vec<CeZoneOverlay>> {
         let mask = 1u8 << tier_idx;
         let (png, coverage) = encode_tier_png(
             &af.tier_plane,
-            RASTER_DIM as usize,
-            RASTER_DIM as usize,
+            af.fine_w as usize,
+            af.fine_h as usize,
             mask,
             tier_color(tier_idx),
         )?;
@@ -856,5 +961,53 @@ mod tests {
         .apply(&mut plane);
         assert!(err.is_err());
         assert_eq!(plane, vec![0x00]);
+    }
+
+    #[test]
+    fn nibble_pack_is_low_nibble_even_column() {
+        let plane = vec![0x01, 0x02, 0x04, 0x08, 0x03, 0x06, 0x0c, 0x00];
+        let packed = pack_nibble_plane(&plane);
+        assert_eq!(packed, vec![0x21, 0x84, 0x63, 0x0c]);
+        assert_eq!(unpack_nibble_plane(&packed, plane.len()), plane);
+    }
+
+    #[test]
+    fn livonia_layout_round_trips_packed_file() {
+        // 4×2 raster: 4 usage planes × 8 cells + 4 packed tier bytes.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&4u32.to_le_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&12800u32.to_le_bytes());
+        bytes.extend_from_slice(&12800u32.to_le_bytes());
+        bytes.extend_from_slice(&32u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&[0u8; 4 * 8]);
+        bytes.extend_from_slice(&[0x21, 0x84, 0x63, 0x0c]);
+
+        let tmp = tempfile::NamedTempFile::new().expect("tmpfile");
+        std::fs::write(tmp.path(), &bytes).expect("write fixture");
+
+        let mut af = AreaflagsFile::load(tmp.path()).expect("load packed");
+        assert_eq!(af.fine_w, 4);
+        assert_eq!(af.fine_h, 2);
+        assert_eq!(af.packing, TierPacking::Nibble);
+        assert_eq!(
+            af.tier_plane,
+            vec![0x01, 0x02, 0x04, 0x08, 0x03, 0x06, 0x0c, 0x00]
+        );
+
+        af.tier_plane[0] = 0x04;
+        af.write(tmp.path()).expect("rewrite");
+        let rewritten = std::fs::read(tmp.path()).expect("reread");
+        assert_eq!(rewritten.len(), bytes.len(), "must stay packed size");
+        assert_eq!(&rewritten[24 + 32..], &[0x24, 0x84, 0x63, 0x0c]);
+
+        let err = TierOverride::FillTier { tier: 4 }.apply_on(
+            &mut af.tier_plane,
+            af.fine_w,
+            af.fine_h,
+            af.valid_tier_bits(),
+        );
+        assert!(err.is_err(), "Unique is not stored in Livonia packing");
     }
 }

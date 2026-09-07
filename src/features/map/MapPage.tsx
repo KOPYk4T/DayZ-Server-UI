@@ -3209,8 +3209,8 @@ function CeZonesPanel({
   return (
     <div className="space-y-2">
       <p className="text-[11px] text-muted-foreground">
-        Loot tiers parsed from <code>areaflags.map</code>. Tier1 is
-        coastal / starter; Tier4 is NWAF / Tisy / endgame.
+        Loot tiers parsed from this mission's <code>areaflags.map</code>.
+        Tier1 is starter loot; higher tiers are inland / military.
       </p>
       <div className="space-y-0.5">
         {overlays.map((o) => {
