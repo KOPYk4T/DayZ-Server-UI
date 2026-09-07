@@ -69,6 +69,9 @@ fn walk(
             .map(|c| c.as_os_str().to_string_lossy().into_owned())
             .collect::<Vec<_>>()
             .join("/");
+        if crate::runtime_noise::is_runtime_noise(&key) {
+            continue;
+        }
         let meta = std::fs::metadata(p)?;
         let sha256 = hash_file(p)?;
         out.insert(

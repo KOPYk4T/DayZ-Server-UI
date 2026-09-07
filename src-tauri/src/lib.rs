@@ -3,6 +3,7 @@ pub mod domain;
 pub mod edits;
 pub mod error;
 pub mod git_ops;
+pub mod runtime_noise;
 pub mod mission;
 pub mod parsers;
 pub mod profiles;
@@ -93,6 +94,8 @@ pub fn run() {
             commands::sync::sync_reset,
             commands::sync::sync_bootstrap,
             commands::sync::sync_file_preview,
+            commands::sync::sync_workspace_log,
+            commands::sync::sync_workspace_commit_preview,
             commands::items::items_list,
             commands::items::items_get,
             commands::items::items_upsert,

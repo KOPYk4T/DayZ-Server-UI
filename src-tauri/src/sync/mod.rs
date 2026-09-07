@@ -124,6 +124,9 @@ pub async fn status_for(
     workspace: &Path,
 ) -> AppResult<WorkspaceStatus> {
     let exists = workspace.exists();
+    if exists {
+        let _ = git_ops::ensure_repo(workspace);
+    }
     let last_pull = load_snapshot(workspace, LAST_PULL_FILE).ok().flatten();
     let last_push = load_snapshot(workspace, LAST_PUSH_FILE).ok().flatten();
 
@@ -430,6 +433,12 @@ fn copy_tree(src: &Path, dst: &Path) -> AppResult<(usize, u64)> {
         if entry.file_type().is_dir() {
             std::fs::create_dir_all(&target)?;
         } else if entry.file_type().is_file() {
+            let rel_key = rel
+                .to_string_lossy()
+                .replace('\\', "/");
+            if crate::runtime_noise::is_runtime_noise(&rel_key) {
+                continue;
+            }
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent)?;
             }

@@ -1,7 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
 import {
-  ArrowDownToLine,
-  ArrowUpFromLine,
+  useEffect,
+  useMemo,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowLeftRight,
+  ArrowRight,
+  ArrowUp,
   FileDiff,
   FolderOpen,
   HardDrive,
@@ -23,71 +32,63 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { ProfileFormDialog } from "@/features/profiles/ProfileFormDialog";
-import { useWorkspaceStatus } from "@/hooks/useProfiles";
+import {
+  ChangesPanel,
+  type ChangesTab,
+} from "@/features/sync/ChangesPanel";
+import {
+  useLocalDiff,
+  useWorkspaceLog,
+  useWorkspaceStatus,
+} from "@/hooks/useProfiles";
 import * as tauri from "@/lib/tauri";
-import { cn, errorMessage } from "@/lib/utils";
+import { cn, errorMessage, formatRelativeTime } from "@/lib/utils";
 import { useProfileStore } from "@/stores/profileStore";
-import type {
-  FilePreview,
-  ReviewItem,
-  ReviewPlan,
-  SyncSide,
-} from "@/types/ipc";
+import type { FilePreview, ReviewItem, ReviewPlan, SyncSide } from "@/types/ipc";
 
-const ONBOARD_KEY = "dzmgr.syncOnboarded";
+type ReviewKind = "write" | "fetch";
+type NextHop = "copy-local" | "merge-local" | "send-prod" | null;
 
 export function SyncPage() {
   const profile = useProfileStore((s) => s.active);
   const id = profile?.id ?? null;
   const status = useWorkspaceStatus(id);
+  const localDiff = useLocalDiff(id);
+  const workspaceLog = useWorkspaceLog(id);
+  const [changesTab, setChangesTab] = useState<ChangesTab>("local");
 
-  const [fetchSide, setFetchSide] = useState<SyncSide>("local");
-  const [resetSide, setResetSide] = useState<SyncSide>("local");
   const [review, setReview] = useState<{
     side: SyncSide;
-    kind: "write" | "fetch";
+    kind: ReviewKind;
     plan: ReviewPlan;
     resolutions: Record<string, "workspace" | "destination">;
   } | null>(null);
   const [resetAsk, setResetAsk] = useState<SyncSide | null>(null);
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState<FilePreview | null>(null);
-  const [showOnboard, setShowOnboard] = useState(
-    () => localStorage.getItem(ONBOARD_KEY) !== "1",
-  );
   const [profileOpen, setProfileOpen] = useState(false);
 
   useEffect(() => {
     if (!id) return;
-    void tauri.syncBootstrap(id).then((r) => {
-      if (r) {
-        toast.success("Workspace imported from Local server");
-        void status.refetch();
-      }
-    }).catch((e: unknown) => {
-      const msg = errorMessage(e);
-      if (!msg.includes("set Local server")) toast.error(msg);
-    });
+    void tauri
+      .syncBootstrap(id)
+      .then((r) => {
+        if (r) {
+          toast.success("Workspace imported from Local server");
+          void status.refetch();
+        }
+      })
+      .catch((e: unknown) => {
+        const msg = errorMessage(e);
+        if (!msg.includes("set Local server")) toast.error(msg);
+      });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  const runProbe = async (side: SyncSide, kind: "write" | "fetch") => {
+  const runProbe = async (side: SyncSide, kind: ReviewKind) => {
     if (!id) return;
     setBusy(true);
     try {
@@ -120,20 +121,20 @@ export function SyncPage() {
       const adopt = [...review.plan.adopt.map((a) => a.path), ...keepDest];
       if (review.kind === "fetch") {
         const n = await tauri.syncFetch(id, review.side, adopt);
-        toast.success(`Fetched ${n} file(s) into the workspace`);
+        toast.success(`Merged ${n} file(s) into the workspace`);
       } else {
         const write = [...review.plan.write.map((w) => w.path), ...keepWork];
         const result = await tauri.syncWrite(id, review.side, write, adopt);
         const dest =
           review.side === "local"
             ? "Local server"
-            : (status.data?.remoteLabel ?? "Remote");
-        toast.success(
-          `Wrote ${result.uploadedCount} file(s) to ${dest}`,
-        );
+            : (status.data?.remoteLabel ?? "Production");
+        toast.success(`Sent ${result.uploadedCount} file(s) to ${dest}`);
       }
       setReview(null);
       void status.refetch();
+      void localDiff.refetch();
+      void workspaceLog.refetch();
     } catch (e: unknown) {
       toast.error(errorMessage(e));
     } finally {
@@ -147,10 +148,12 @@ export function SyncPage() {
     try {
       await tauri.syncReset(id, resetAsk);
       toast.success(
-        `Workspace replaced from ${resetAsk === "local" ? "Local server" : "Remote"}`,
+        `Workspace replaced from ${resetAsk === "local" ? "Local server" : "Production"}`,
       );
       setResetAsk(null);
       void status.refetch();
+      void localDiff.refetch();
+      void workspaceLog.refetch();
     } catch (e: unknown) {
       toast.error(errorMessage(e));
     } finally {
@@ -158,81 +161,208 @@ export function SyncPage() {
     }
   };
 
-  const dismissOnboard = () => {
-    localStorage.setItem(ONBOARD_KEY, "1");
-    setShowOnboard(false);
-  };
-
   const st = status.data;
-
   const remoteReady = !!st?.hasSftp;
+  const pendingLocal =
+    (localDiff.data?.addedCount ?? 0) +
+    (localDiff.data?.modifiedCount ?? 0) +
+    (localDiff.data?.deletedCount ?? 0);
+
+  const nextHop: NextHop = !st?.localServerPath
+    ? null
+    : !st.exists
+      ? "merge-local"
+      : pendingLocal > 0
+        ? "copy-local"
+        : remoteReady
+          ? "send-prod"
+          : null;
+
+  const reviewTitle = review
+    ? review.kind === "write"
+      ? review.side === "local"
+        ? "Copy to Local server"
+        : "Send to production"
+      : review.side === "local"
+        ? "Merge from Local server"
+        : "Merge from production"
+    : "";
+
+  const reviewBody = review
+    ? review.kind === "write"
+      ? review.side === "local"
+        ? "Files that will be copied from the workspace to the dedicated folder on this PC. Review, then confirm."
+        : "Files that will be uploaded from the workspace to production (SFTP). Same files you test on Local server."
+      : "Files that will be merged into the workspace. Other workspace edits stay. Conflicts need a choice."
+    : "";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader
-        icon={ArrowDownToLine}
+        icon={ArrowLeftRight}
         title="Sync"
-        description="Edit in the workspace. Sync to local to test. Push to Remote when it is ready."
+        description="Edit in Workspace. Copy to Local to test. Send to production when the test looks right."
       />
 
-      <div className="flex min-h-0 flex-1 flex-col gap-10 overflow-y-auto px-6 py-8">
-      {showOnboard ? (
-        <aside className="max-w-3xl rounded-md border border-border bg-card px-5 py-6">
-          <h2 className="type-section">How Sync works</h2>
-          <ol className="mt-5 grid gap-6 sm:grid-cols-3">
-            <li className="min-w-0">
-              <p className="type-section">Workspace</p>
-              <p className="type-hint mt-1.5">
-                You edit here. App data cache, not the Steam folder.
-              </p>
-            </li>
-            <li className="min-w-0">
-              <p className="type-section">Sync to local</p>
-              <p className="type-hint mt-1.5">
-                Copy the reviewed diff to your dedicated server and test.
-              </p>
-            </li>
-            <li className="min-w-0">
-              <p className="type-section">Push to Remote</p>
-              <p className="type-hint mt-1.5">
-                Upload that same reviewed diff to SFTP.
-              </p>
-            </li>
-          </ol>
-          <div className="mt-6 flex gap-2">
-            <Button size="sm" onClick={dismissOnboard}>
-              Got it
-            </Button>
-            <Button size="sm" variant="ghost" onClick={dismissOnboard}>
-              Skip
-            </Button>
-          </div>
-        </aside>
-      ) : null}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-6">
+        <div className="flex shrink-0 flex-col gap-2 lg:flex-row lg:items-stretch">
+          <PlaceCard
+            icon={FileDiff}
+            title="Workspace"
+            hint="You edit here. App data, not Steam."
+            path={st?.workspacePath}
+            meta={
+              st?.exists
+                ? st.dirty
+                  ? "Uncommitted edits"
+                  : pendingLocal > 0
+                    ? `${pendingLocal} file${pendingLocal === 1 ? "" : "s"} not on Local`
+                    : "In sync with Local"
+                : st?.localServerPath
+                  ? "Empty — merge from Local server"
+                  : "Empty — set Local server first"
+            }
+            metaTone={
+              st?.exists && (st.dirty || pendingLocal > 0)
+                ? "warning"
+                : "muted"
+            }
+            onMetaClick={
+              st?.exists
+                ? () =>
+                    setChangesTab(st.dirty ? "history" : "local")
+                : undefined
+            }
+            onOpen={
+              st?.workspacePath
+                ? () => void tauri.profilesOpenWorkspace(profile!.id)
+                : undefined
+            }
+          />
 
-      <section className="space-y-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <Button
-            size="lg"
-            disabled={busy || !st?.localServerPath}
-            onClick={() => void runProbe("local", "write")}
-          >
-            {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-            Sync to local
-          </Button>
-          <Button
-            size="lg"
-            variant="secondary"
-            disabled={busy || !remoteReady}
-            onClick={() => void runProbe("remote", "write")}
-          >
-            <ArrowUpFromLine className="mr-2 h-4 w-4" />
-            Push to Remote
-          </Button>
+          <HopRail>
+            <HopButton
+              forward
+              label="Copy to Local"
+              hint="Review the workspace diff, then copy it to the dedicated folder."
+              disabled={busy || !st?.localServerPath}
+              primary={nextHop === "copy-local"}
+              onClick={() => void runProbe("local", "write")}
+            />
+            <HopButton
+              forward={false}
+              label="Merge from Local"
+              hint="Bring Local server files into the workspace. Keeps your other edits."
+              disabled={busy || !st?.localServerPath}
+              primary={nextHop === "merge-local"}
+              onClick={() => void runProbe("local", "fetch")}
+            />
+            <button
+              type="button"
+              disabled={busy || !st?.localServerPath}
+              onClick={() => setResetAsk("local")}
+              className="type-hint text-center underline-offset-2 hover:text-foreground hover:underline disabled:opacity-40"
+            >
+              Replace workspace from Local
+            </button>
+          </HopRail>
+
+          <PlaceCard
+            icon={HardDrive}
+            title="Local server"
+            hint="Dedicated folder on this PC. Test here."
+            path={st?.localServerPath ?? undefined}
+            meta={
+              !st?.localServerPath
+                ? "Not set — edit the profile"
+                : st.localServerExists
+                  ? pendingLocal > 0
+                    ? `${pendingLocal} file${pendingLocal === 1 ? "" : "s"} behind workspace`
+                    : "On disk"
+                  : "Path missing"
+            }
+            metaTone={
+              st?.localServerExists && pendingLocal > 0 ? "warning" : "muted"
+            }
+            onMetaClick={
+              st?.localServerPath
+                ? () => setChangesTab("local")
+                : undefined
+            }
+            onOpen={
+              st?.localServerPath
+                ? () =>
+                    void openPath(st.localServerPath!).catch((e: unknown) =>
+                      toast.error(errorMessage(e)),
+                    )
+                : () => setProfileOpen(true)
+            }
+            openLabel={st?.localServerPath ? "Open folder" : "Set in profile"}
+          />
+
+          <HopRail>
+            <HopButton
+              forward
+              label="Send to production"
+              hint="Upload the workspace to SFTP. Production receives the workspace, not a separate local-only copy."
+              disabled={busy || !remoteReady}
+              primary={nextHop === "send-prod"}
+              onClick={() => void runProbe("remote", "write")}
+            />
+            <HopButton
+              forward={false}
+              label="Merge from production"
+              hint="Bring production files into the workspace. Keeps your other edits."
+              disabled={busy || !remoteReady}
+              onClick={() => void runProbe("remote", "fetch")}
+            />
+            <button
+              type="button"
+              disabled={busy || !remoteReady}
+              onClick={() => setResetAsk("remote")}
+              className="type-hint text-center underline-offset-2 hover:text-foreground hover:underline disabled:opacity-40"
+            >
+              Replace workspace from Production
+            </button>
+          </HopRail>
+
+          <PlaceCard
+            icon={Server}
+            title="Production"
+            hint="Remote SFTP. Live server."
+            path={remoteReady ? st?.remoteLabel : undefined}
+            meta={
+              remoteReady
+                ? st && st.unpushedCount > 0
+                  ? `${st.unpushedCount} workspace save${st.unpushedCount === 1 ? "" : "s"} not sent to production · last ${formatRelativeTime(st.lastPushAt)}`
+                  : `Last sent ${formatRelativeTime(st?.lastPushAt)}`
+                : "Not set"
+            }
+            metaTone={
+              remoteReady && (st?.unpushedCount ?? 0) > 0 ? "warning" : "muted"
+            }
+            onMetaClick={
+              remoteReady ? () => setChangesTab("history") : undefined
+            }
+            onOpen={() => setProfileOpen(true)}
+            openLabel={remoteReady ? "Edit SFTP" : "Connect SFTP"}
+          />
         </div>
-        {!remoteReady ? (
+
+        {!st?.localServerPath ? (
           <p className="type-hint">
-            Push needs SFTP.{" "}
+            Copy to Local needs a dedicated folder.{" "}
+            <button
+              type="button"
+              className="underline underline-offset-2 hover:text-foreground"
+              onClick={() => setProfileOpen(true)}
+            >
+              Set Local server
+            </button>
+          </p>
+        ) : !remoteReady ? (
+          <p className="type-hint">
+            Send to production needs SFTP.{" "}
             <button
               type="button"
               className="underline underline-offset-2 hover:text-foreground"
@@ -241,134 +371,22 @@ export function SyncPage() {
               Connect SFTP
             </button>
           </p>
+        ) : pendingLocal > 0 && nextHop === "copy-local" ? (
+          <p className="type-hint">
+            Copy to Local first. Production uploads the workspace — test the
+            dedicated folder before you send.
+          </p>
         ) : null}
-      </section>
 
-      <section className="space-y-4">
-        <div className="space-y-1">
-          <h2 className="type-section">Places</h2>
-          <p className="type-hint">The same files, in three spots.</p>
-        </div>
-        <div className="grid gap-3 lg:grid-cols-3">
-        <PlaceCard
-          title="Workspace"
-          hint="You edit here"
-          path={st?.workspacePath}
-          meta={
-            st?.exists
-              ? st.dirty
-                ? "uncommitted edits"
-                : "ready"
-              : st?.localServerPath
-                ? "empty — import from Local server"
-                : "empty — set Local server or Reset from Remote"
-          }
-          icon={FileDiff}
-          onOpen={
-            st?.workspacePath
-              ? () => void tauri.profilesOpenWorkspace(profile!.id)
-              : undefined
-          }
-        />
-        <PlaceCard
-          title="Local server"
-          hint="Dedicated folder on this PC"
-          path={st?.localServerPath ?? undefined}
-          meta={
-            !st?.localServerPath
-              ? "not set — edit the profile"
-              : st.localServerExists
-                ? "on disk"
-                : "path missing"
-          }
-          icon={HardDrive}
-          onOpen={
-            st?.localServerPath
-              ? () =>
-                  void openPath(st.localServerPath!).catch((e: unknown) =>
-                    toast.error(errorMessage(e)),
-                  )
-              : () => setProfileOpen(true)
-          }
-          openLabel={st?.localServerPath ? "Open folder" : "Set in profile"}
-        />
-        <PlaceCard
-          title="Remote"
-          hint="Push destination"
-          path={remoteReady ? st?.remoteLabel : undefined}
-          meta={remoteReady ? "SFTP" : "not set"}
-          icon={Server}
-          onOpen={() => setProfileOpen(true)}
-          openLabel={remoteReady ? "Edit SFTP" : "Connect SFTP"}
-        />
-        </div>
-      </section>
-
-      <section>
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle>Update workspace</CardTitle>
-          <CardDescription>
-            Fetch reconciles into the workspace and keeps your other edits.
-            Reset replaces the workspace with a full copy.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-end gap-4">
-          <div className="space-y-1.5">
-            <p className="type-hint">Fetch</p>
-            <div className="flex gap-2">
-              <Select
-                value={fetchSide}
-                onValueChange={(v) => setFetchSide(v as SyncSide)}
-              >
-                <SelectTrigger className="w-36">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="local">Local</SelectItem>
-                  <SelectItem value="remote" disabled={!st?.hasSftp}>
-                    Remote
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                variant="outline"
-                disabled={busy || (fetchSide === "local" && !st?.localServerPath)}
-                onClick={() => void runProbe(fetchSide, "fetch")}
-              >
-                Fetch
-              </Button>
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <p className="type-hint">Reset</p>
-            <div className="flex gap-2">
-              <Select
-                value={resetSide}
-                onValueChange={(v) => setResetSide(v as SyncSide)}
-              >
-                <SelectTrigger className="w-36">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="local">Local</SelectItem>
-                  <SelectItem value="remote" disabled={!st?.hasSftp}>
-                    Remote
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <Button
-                variant="outline"
-                disabled={busy || (resetSide === "local" && !st?.localServerPath)}
-                onClick={() => setResetAsk(resetSide)}
-              >
-                Reset
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-      </section>
+        {id ? (
+          <ChangesPanel
+            profileId={id}
+            localDiff={localDiff.data}
+            log={workspaceLog.data}
+            tab={changesTab}
+            onTabChange={setChangesTab}
+          />
+        ) : null}
       </div>
 
       <ProfileFormDialog
@@ -380,14 +398,8 @@ export function SyncPage() {
       <AlertDialog open={!!review} onOpenChange={(o) => !o && setReview(null)}>
         <AlertDialogContent className="max-w-2xl">
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              {review?.kind === "fetch" ? "Fetch into workspace" : "Review write"}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {review?.kind === "write"
-                ? `Files that will be written to ${review.side === "local" ? "Local server" : "Remote"}. Adopted files come from the destination. Conflicts need a choice.`
-                : "Reconcile into the workspace. Conflicts need a choice. Other workspace edits stay."}
-            </AlertDialogDescription>
+            <AlertDialogTitle>{reviewTitle}</AlertDialogTitle>
+            <AlertDialogDescription>{reviewBody}</AlertDialogDescription>
           </AlertDialogHeader>
           {review ? (
             <ReviewBody
@@ -414,7 +426,7 @@ export function SyncPage() {
           <AlertDialogFooter>
             <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
             <AlertDialogAction
-              disabled={busy || (review?.plan.conflicts.length ?? 0) > 0 && false}
+              disabled={busy}
               onClick={(e) => {
                 e.preventDefault();
                 void confirmReview();
@@ -427,21 +439,27 @@ export function SyncPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog open={!!resetAsk} onOpenChange={(o) => !o && setResetAsk(null)}>
+      <AlertDialog
+        open={!!resetAsk}
+        onOpenChange={(o) => !o && setResetAsk(null)}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Reset workspace</AlertDialogTitle>
+            <AlertDialogTitle>
+              Replace workspace from{" "}
+              {resetAsk === "local" ? "Local server" : "Production"}
+            </AlertDialogTitle>
             <AlertDialogDescription>
               This replaces mpmissions, profiles, and serverDZ.cfg in the
               workspace with a full copy from{" "}
-              {resetAsk === "local" ? "Local server" : "Remote"}. Unsynced
+              {resetAsk === "local" ? "Local server" : "Production"}. Unsynced
               workspace edits in those trees are lost.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={() => void confirmReset()}>
-              Reset workspace
+              Replace workspace
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -455,7 +473,9 @@ function PlaceCard({
   hint,
   path,
   meta,
+  metaTone = "muted",
   icon: Icon,
+  onMetaClick,
   onOpen,
   openLabel = "Open folder",
 }: {
@@ -463,29 +483,111 @@ function PlaceCard({
   hint: string;
   path?: string | null;
   meta: string;
-  icon: React.ComponentType<{ className?: string }>;
+  metaTone?: "muted" | "warning";
+  icon: ComponentType<{ className?: string }>;
+  onMetaClick?: () => void;
   onOpen?: () => void;
   openLabel?: string;
 }) {
   return (
-    <div className="rounded-md border border-border bg-card px-4 py-4">
-      <div className="type-section flex items-center gap-2">
-        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
-        {title}
-      </div>
-      <p className="type-hint mt-1">{hint}</p>
-      <p className="type-mono mt-3 truncate" title={path ?? ""}>
-        {path || "—"}
-      </p>
-      <div className="mt-3 flex items-center justify-between gap-2">
-        <p className="type-hint">{meta}</p>
-        {onOpen ? (
-          <Button size="sm" variant="ghost" className="h-7 px-2" onClick={onOpen}>
-            <FolderOpen className="mr-1 h-3 w-3" />
-            {openLabel}
-          </Button>
-        ) : null}
-      </div>
+    <Card className="min-w-0 flex-1">
+      <CardHeader className="border-b border-border pb-4">
+        <div className="flex items-center gap-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted">
+            <Icon className="size-4 text-muted-foreground" />
+          </span>
+          <div className="min-w-0 space-y-0.5">
+            <CardTitle className="type-block text-[1.25rem]">{title}</CardTitle>
+            <p className="type-hint">{hint}</p>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-1 flex-col gap-4">
+        <p className="type-mono truncate" title={path ?? ""}>
+          {path || "—"}
+        </p>
+        <div className="mt-auto flex items-center justify-between gap-2">
+          {onMetaClick ? (
+            <button
+              type="button"
+              onClick={onMetaClick}
+              className={cn(
+                "rounded-md border px-2 py-1 text-left transition-colors hover:bg-accent",
+                metaTone === "warning"
+                  ? "border-severity-warning/30 bg-severity-warning/10 text-severity-warning"
+                  : "border-border type-hint hover:text-foreground",
+              )}
+            >
+              {meta}
+            </button>
+          ) : (
+            <p className="type-hint">{meta}</p>
+          )}
+          {onOpen ? (
+            <Button size="sm" variant="outline" onClick={onOpen}>
+              <FolderOpen />
+              {openLabel}
+            </Button>
+          ) : null}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function HopRail({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex shrink-0 flex-row items-center justify-center gap-6 px-1 py-2 lg:w-36 lg:flex-col lg:gap-4">
+      {children}
+    </div>
+  );
+}
+
+function HopButton({
+  forward,
+  label,
+  hint,
+  onClick,
+  disabled,
+  primary,
+}: {
+  forward: boolean;
+  label: string;
+  hint: string;
+  onClick: () => void;
+  disabled?: boolean;
+  primary?: boolean;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-1.5">
+      <button
+        type="button"
+        title={hint}
+        disabled={disabled}
+        onClick={onClick}
+        className={cn(
+          "flex size-11 items-center justify-center rounded-md border transition-colors",
+          primary
+            ? "border-primary bg-primary text-primary-foreground hover:bg-primary/90"
+            : "border-foreground/55 bg-transparent text-foreground hover:bg-foreground hover:text-background",
+          disabled && "pointer-events-none opacity-40",
+        )}
+      >
+        {forward ? (
+          <>
+            <ArrowRight className="hidden size-4 lg:block" />
+            <ArrowDown className="size-4 lg:hidden" />
+          </>
+        ) : (
+          <>
+            <ArrowLeft className="hidden size-4 lg:block" />
+            <ArrowUp className="size-4 lg:hidden" />
+          </>
+        )}
+      </button>
+      <span className="type-hint max-w-28 text-center leading-tight">
+        {label}
+      </span>
     </div>
   );
 }
@@ -520,7 +622,10 @@ function ReviewBody({
               </p>
               <ul className="space-y-1">
                 {s.items.map((item) => (
-                  <li key={item.path} className="flex flex-wrap items-center gap-2">
+                  <li
+                    key={item.path}
+                    className="flex flex-wrap items-center gap-2"
+                  >
                     <button
                       type="button"
                       className="min-w-0 flex-1 truncate text-left font-mono text-xs underline-offset-2 hover:underline"
@@ -596,8 +701,12 @@ function UnifiedDiff({
           <div
             key={i}
             className={cn(
-              l.startsWith("+") && !l.startsWith("+++") && "text-severity-success",
-              l.startsWith("-") && !l.startsWith("---") && "text-severity-error",
+              l.startsWith("+") &&
+                !l.startsWith("+++") &&
+                "text-severity-success",
+              l.startsWith("-") &&
+                !l.startsWith("---") &&
+                "text-severity-error",
             )}
           >
             {l}

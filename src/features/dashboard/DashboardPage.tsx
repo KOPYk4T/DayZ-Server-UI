@@ -2,9 +2,7 @@ import { useMemo, type ComponentType, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Activity,
-  ArrowDownToLine,
   ArrowRight,
-  ArrowUpFromLine,
   Boxes,
   Compass,
   FileStack,
@@ -211,31 +209,16 @@ export function DashboardPage() {
           </div>
 
           <HomeBlock icon={ArrowRight} title="Next">
-            <div className="flex flex-col gap-2">
-              <Button
-                className="w-full justify-start"
-                onClick={() => navigate("/app/sync")}
-              >
-                <ArrowDownToLine />
-                Sync to local
-              </Button>
-              <Button
-                className="w-full justify-start"
-                variant="secondary"
-                onClick={() => navigate("/app/sync")}
-              >
-                <ArrowUpFromLine />
-                Push to Remote
-              </Button>
-              <Button
-                className="w-full justify-start"
-                variant="outline"
-                onClick={() => navigate("/app/items")}
-              >
-                <Package />
-                Open Types
-              </Button>
-            </div>
+            <p className="type-hint mb-3">
+              Copy the workspace to Local server, then send to production.
+            </p>
+            <Button
+              className="w-full justify-start"
+              onClick={() => navigate("/app/sync")}
+            >
+              <ArrowRight />
+              Open Sync
+            </Button>
           </HomeBlock>
         </div>
 
@@ -261,13 +244,13 @@ export function DashboardPage() {
             />
             <Step
               n="2"
-              title="Sync to local"
+              title="Copy to Local server"
               body="Review the diff, copy it to the dedicated folder, restart the server."
             />
             <Step
               n="3"
-              title="Push to Remote"
-              body="Same reviewed diff, to SFTP, after the local test looks right."
+              title="Send to production"
+              body="After the local test looks right, upload the workspace over SFTP."
             />
           </ol>
         </HomeBlock>

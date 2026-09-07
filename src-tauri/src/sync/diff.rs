@@ -43,6 +43,9 @@ pub fn compute_against(base: &Snapshot, current: &Snapshot) -> DiffSummary {
     let mut bytes = 0u64;
 
     for (path, cur) in &current.files {
+        if crate::runtime_noise::is_runtime_noise(path) {
+            continue;
+        }
         match base.files.get(path) {
             Some(prev) => {
                 if prev.sha256 != cur.sha256 {
@@ -73,6 +76,9 @@ pub fn compute_against(base: &Snapshot, current: &Snapshot) -> DiffSummary {
         }
     }
     for (path, prev) in &base.files {
+        if crate::runtime_noise::is_runtime_noise(path) {
+            continue;
+        }
         if !current.files.contains_key(path) {
             deleted += 1;
             changes.push(FileChange {

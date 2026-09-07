@@ -322,6 +322,33 @@ pub async fn sync_bootstrap(
 }
 
 #[tauri::command]
+pub async fn sync_workspace_log(
+    id: String,
+    state: State<'_, AppState>,
+) -> AppResult<Vec<git_ops::WorkspaceCommit>> {
+    let workspace = state.workspace_for(&id);
+    git_ops::list_log(&workspace, 40)
+}
+
+#[tauri::command]
+pub async fn sync_workspace_commit_preview(
+    id: String,
+    sha: String,
+    path: String,
+    state: State<'_, AppState>,
+) -> AppResult<FilePreview> {
+    let workspace = state.workspace_for(&id);
+    let (workspace_text, dest_text) = git_ops::file_at_commit(&workspace, &sha, &path)?;
+    let binary = workspace_text.is_none() && dest_text.is_none();
+    Ok(FilePreview {
+        path,
+        workspace_text,
+        dest_text,
+        binary,
+    })
+}
+
+#[tauri::command]
 pub async fn sync_file_preview(
     id: String,
     side: SyncSide,

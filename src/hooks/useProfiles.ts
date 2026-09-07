@@ -179,6 +179,15 @@ export function useLocalDiff(id: string | null) {
   });
 }
 
+export function useWorkspaceLog(id: string | null) {
+  return useQuery({
+    queryKey: id ? ["profiles", id, "workspace-log"] : ["profiles", "__none__"],
+    queryFn: () => tauri.syncWorkspaceLog(id!),
+    enabled: !!id,
+    staleTime: 10_000,
+  });
+}
+
 export function useRemoteDiff() {
   return useMutation({
     mutationFn: (id: string) => tauri.syncDiffAgainstRemote(id),

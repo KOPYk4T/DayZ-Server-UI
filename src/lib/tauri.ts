@@ -60,6 +60,7 @@ import type {
   TerritoriesSnapshot,
   TerritoryBinding,
   TerritoryFile,
+  WorkspaceCommit,
   WorkspaceStatus,
 } from "@/types/ipc";
 
@@ -207,6 +208,18 @@ export function syncFilePreview(
   path: string,
 ): Promise<FilePreview> {
   return invoke("sync_file_preview", { id, side, path });
+}
+
+export function syncWorkspaceLog(id: string): Promise<WorkspaceCommit[]> {
+  return invoke("sync_workspace_log", { id });
+}
+
+export function syncWorkspaceCommitPreview(
+  id: string,
+  sha: string,
+  path: string,
+): Promise<FilePreview> {
+  return invoke("sync_workspace_commit_preview", { id, sha, path });
 }
 
 // ---------- Items (types.xml) ----------

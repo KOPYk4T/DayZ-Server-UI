@@ -307,6 +307,13 @@ export interface FilePreview {
   binary: boolean;
 }
 
+export interface WorkspaceCommit {
+  sha: string;
+  message: string;
+  committedAt: string;
+  files: string[];
+}
+
 // ---------- Items (types.xml) ----------
 
 export type ItemSource = "vanilla" | "mod" | "custom";
