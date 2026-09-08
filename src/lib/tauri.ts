@@ -629,6 +629,48 @@ export function expansionListDir(
   return invoke("expansion_list_dir", { id, relativePath });
 }
 
+export function profileJsonsScan(
+  id: string,
+): Promise<import("@/types/ipc").ProfileJsonCatalog> {
+  return invoke("profile_jsons_scan", { id });
+}
+
+export function profileJsonsSetOverride(
+  id: string,
+  relativePath: string,
+  action: import("@/types/ipc").ProfileJsonOverrideAction,
+): Promise<import("@/types/ipc").ProfileJsonCatalog> {
+  return invoke("profile_jsons_set_override", { id, relativePath, action });
+}
+
+export function profileJsonsResetOverrides(
+  id: string,
+): Promise<import("@/types/ipc").ProfileJsonCatalog> {
+  return invoke("profile_jsons_reset_overrides", { id });
+}
+
+export function profileJsonsRead(
+  id: string,
+  relativePath: string,
+): Promise<string> {
+  return invoke("profile_jsons_read", { id, relativePath });
+}
+
+export function profileJsonsWrite(
+  id: string,
+  relativePath: string,
+  content: string,
+): Promise<void> {
+  return invoke("profile_jsons_write", { id, relativePath, content });
+}
+
+export function profileJsonsDelete(
+  id: string,
+  relativePath: string,
+): Promise<import("@/types/ipc").ProfileJsonCatalog> {
+  return invoke("profile_jsons_delete", { id, relativePath });
+}
+
 // ---------- Mod activation store ----------
 
 export function modsActivationGet(

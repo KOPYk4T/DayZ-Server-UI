@@ -69,6 +69,7 @@ const ROUTES: RouteEntry[] = [
   { to: "/app/ignorelist", label: "CE ignore list", icon: EyeOff, keywords: "cfgignorelist" },
   { to: "/app/server-config", label: "Server Config", icon: Wrench, keywords: "serverdz.cfg" },
   { to: "/app/mods", label: "Mods", icon: Puzzle, keywords: "workshop expansion", requiresAddon: "mods" },
+  { to: "/app/mod-settings", label: "Mod settings", icon: Sliders, keywords: "profiles json vpp cot expansion settings", requiresAddon: "mods" },
   { to: "/app/health", label: "Health", icon: Activity },
   { to: "/app/settings", label: "Settings", icon: Settings },
 ];

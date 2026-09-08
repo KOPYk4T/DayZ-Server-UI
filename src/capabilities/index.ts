@@ -59,6 +59,7 @@ export const ROUTE_REQUIREMENTS: Record<string, CapabilityTier[]> = {
 
   // Mods — workspace + at least one mod registered.
   "/app/mods": ["workspace", "mods"],
+  "/app/mod-settings": ["workspace"],
 
   // Reskin / Modpack.
   "/app/reskin": [], // setup/env page itself

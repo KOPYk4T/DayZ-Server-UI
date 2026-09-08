@@ -839,6 +839,34 @@ export interface ExpansionDirListing {
   entries: ExpansionDirEntry[];
 }
 
+export type ProfileJsonOverride = "include" | "exclude";
+export type ProfileJsonOverrideAction = "include" | "exclude" | "auto";
+
+export interface ProfileJsonFile {
+  name: string;
+  fileName: string;
+  relativePath: string;
+  sizeBytes: number;
+  autoOn: boolean;
+  reason: string;
+  enabled: boolean;
+  overrideState?: ProfileJsonOverride | null;
+  dedicatedRoute?: string | null;
+}
+
+export interface ProfileJsonGroup {
+  folder: string;
+  files: ProfileJsonFile[];
+}
+
+export interface ProfileJsonCatalog {
+  profilesRoot: string;
+  missing: boolean;
+  groups: ProfileJsonGroup[];
+  enabledCount: number;
+  totalCount: number;
+}
+
 // ---------- Expansion mission-side (mpmissions/<map>/expansion) ----------
 
 // ---------- Mod activation store ----------

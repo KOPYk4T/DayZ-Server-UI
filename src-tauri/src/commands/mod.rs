@@ -18,6 +18,7 @@ pub mod loadouts;
 pub mod mods;
 pub mod mods_activation;
 pub mod player_spawns;
+pub mod profile_jsons;
 pub mod profiles;
 pub mod reskin_build;
 pub mod reskin_env;

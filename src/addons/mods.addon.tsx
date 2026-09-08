@@ -9,6 +9,7 @@ import { ObjectivesPage } from "@/features/mods/expansion/quests/objectives/Obje
 import { QuestGraphPage } from "@/features/mods/expansion/quests/QuestGraphPage";
 import { QuestsPage } from "@/features/mods/expansion/quests/QuestsPage";
 import { TradersPage } from "@/features/mods/expansion/traders/TradersPage";
+import { ModSettingsPage } from "@/features/mod-settings/ModSettingsPage";
 import { MOD_MODULES } from "@/features/mods/modules";
 import { ModsPage } from "@/features/mods/ModsPage";
 
@@ -17,6 +18,7 @@ import { ModsSidebarSection } from "./ModsSidebarSection";
 import type { AddonRoute } from "./types";
 
 const routes: AddonRoute[] = [
+  { path: "mod-settings", element: <ModSettingsPage /> },
   { path: "mods", element: <ModsPage /> },
   ...MOD_MODULES.map((mod) => {
     const Page = mod.page;

@@ -9,6 +9,7 @@ import {
   Puzzle,
   ScrollText,
   ShirtIcon,
+  Sliders,
   Store,
   UsersRound,
 } from "lucide-react";
@@ -42,6 +43,12 @@ export function ModsSidebarSection() {
         <span>Mods</span>
       </div>
       <ul className="space-y-0.5">
+        <SidebarItem
+          to="/app/mod-settings"
+          icon={Sliders}
+          label="Mod settings"
+          depth="menu"
+        />
         <SidebarItem
           to="/app/mods"
           icon={PackagePlus}
