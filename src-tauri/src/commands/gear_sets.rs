@@ -3,7 +3,7 @@
 use serde::Serialize;
 use tauri::State;
 
-use crate::domain::PlayerSpawnGear;
+use crate::domain::{PlayerSpawnGear, SpawnKit};
 use crate::error::{AppError, AppResult};
 use crate::git_ops;
 use crate::mission::{player_spawn_gear as psg_mod, MissionContext};
@@ -29,6 +29,8 @@ async fn ctx_for(id: &str, state: &State<'_, AppState>) -> AppResult<MissionCont
 pub struct GearSetsSnapshot {
     pub data: PlayerSpawnGear,
     pub missing_file: bool,
+    /// `spawnPresets` | `cfgPlayerSpawnGear` | `missing`
+    pub source: String,
     /// Absolute-ish file path (workspace-relative preferable but we
     /// only need it for display hints — the frontend doesn't open it).
     pub file_display: String,
@@ -36,6 +38,8 @@ pub struct GearSetsSnapshot {
     /// how many of them are recognised by the Items registry (Phase
     /// 6b will add cross-ref validation).
     pub all_classnames: Vec<String>,
+    /// Populated when `source` is `spawnPresets`. Empty otherwise.
+    pub kits: Vec<SpawnKit>,
 }
 
 #[tauri::command]
@@ -44,9 +48,9 @@ pub async fn gear_sets_get(
     state: State<'_, AppState>,
 ) -> AppResult<GearSetsSnapshot> {
     let ctx = ctx_for(&id, &state).await?;
-    let p = psg_mod::path(&ctx);
-    let missing_file = !p.exists();
+    let source = psg_mod::resolve_source(&ctx);
     let data = psg_mod::load(&ctx)?;
+    let missing_file = source == psg_mod::GearFileSource::Missing;
 
     // Union of every classname referenced by every loadout.
     let mut seen = std::collections::HashSet::new();
@@ -60,16 +64,37 @@ pub async fn gear_sets_get(
     }
     all_classnames.sort();
 
-    let file_display = p
-        .strip_prefix(&ctx.workspace)
-        .map(|r| r.to_string_lossy().replace('\\', "/"))
-        .unwrap_or_else(|_| p.to_string_lossy().replace('\\', "/"));
+    let file_display = match source {
+        psg_mod::GearFileSource::SpawnPresets => psg_mod::spawn_preset_paths(&ctx)
+            .into_iter()
+            .map(|p| {
+                p.strip_prefix(&ctx.workspace)
+                    .map(|r| r.to_string_lossy().replace('\\', "/"))
+                    .unwrap_or_else(|_| p.to_string_lossy().replace('\\', "/"))
+            })
+            .collect::<Vec<_>>()
+            .join(", "),
+        _ => {
+            let p = psg_mod::path(&ctx);
+            p.strip_prefix(&ctx.workspace)
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| p.to_string_lossy().replace('\\', "/"))
+        }
+    };
+
+    let kits = if source == psg_mod::GearFileSource::SpawnPresets {
+        psg_mod::load_kits(&ctx)?
+    } else {
+        Vec::new()
+    };
 
     Ok(GearSetsSnapshot {
         data,
         missing_file,
+        source: source.as_str().into(),
         file_display,
         all_classnames,
+        kits,
     })
 }
 
@@ -80,6 +105,11 @@ pub async fn gear_sets_update(
     state: State<'_, AppState>,
 ) -> AppResult<GearSetsSnapshot> {
     let ctx = ctx_for(&id, &state).await?;
+    if psg_mod::resolve_source(&ctx) == psg_mod::GearFileSource::SpawnPresets {
+        return Err(AppError::Internal(
+            "this mission uses spawn presets — call gear_sets_update_kits".into(),
+        ));
+    }
     psg_mod::save(&ctx, &data)?;
     git_ops::commit_all(
         &ctx.workspace,
@@ -87,6 +117,26 @@ pub async fn gear_sets_update(
     )?;
     // Re-read to produce a fresh snapshot (picks up any formatting
     // changes from the serializer, keeps the frontend in sync).
+    gear_sets_get(id, state).await
+}
+
+#[tauri::command]
+pub async fn gear_sets_update_kits(
+    id: String,
+    kits: Vec<SpawnKit>,
+    state: State<'_, AppState>,
+) -> AppResult<GearSetsSnapshot> {
+    let ctx = ctx_for(&id, &state).await?;
+    if psg_mod::resolve_source(&ctx) != psg_mod::GearFileSource::SpawnPresets {
+        return Err(AppError::Internal(
+            "this mission has no spawnGearPresetFiles — use gear_sets_update".into(),
+        ));
+    }
+    psg_mod::save_kits(&ctx, &kits)?;
+    git_ops::commit_all(
+        &ctx.workspace,
+        "edit(gear-sets): spawn preset kit",
+    )?;
     gear_sets_get(id, state).await
 }
 

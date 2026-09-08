@@ -15,7 +15,10 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::domain::{GearLoadout, PlayerSpawnGear, SpawnEntry};
+use crate::domain::{
+    GearLoadout, PlayerSpawnGear, SpawnEntry, SpawnKit, SpawnKitItem, SpawnKitPocket,
+    SpawnKitSlot,
+};
 use crate::error::{AppError, AppResult};
 
 // ---------- Raw schema (permissive) ----------
@@ -56,8 +59,17 @@ pub fn parse_file(path: &Path) -> AppResult<PlayerSpawnGear> {
 }
 
 pub fn parse_bytes(bytes: &[u8]) -> Result<PlayerSpawnGear, String> {
-    let raw: RawFile =
+    let value: Value =
         serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    if looks_like_spawn_preset(&value) {
+        let loadout = parse_spawn_preset_value(&value)?;
+        return Ok(PlayerSpawnGear {
+            version: None,
+            loadouts: vec![loadout],
+        });
+    }
+    let raw: RawFile =
+        serde_json::from_value(value).map_err(|e| e.to_string())?;
     let loadouts = raw
         .loadouts
         .into_iter()
@@ -67,6 +79,98 @@ pub fn parse_bytes(bytes: &[u8]) -> Result<PlayerSpawnGear, String> {
         version: raw.version,
         loadouts,
     })
+}
+
+/// DayZ 1.24+ preset from `cfggameplay.json` →
+/// `PlayerData.spawnGearPresetFiles`. One file = one loadout.
+/// Slots live under `attachmentSlotItemSets`; cargo under
+/// `discreteUnsortedItemSets`. Classnames are `itemType`.
+fn looks_like_spawn_preset(v: &Value) -> bool {
+    v.get("attachmentSlotItemSets").is_some()
+        || v.get("discreteUnsortedItemSets").is_some()
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct RawSpawnPreset {
+    character_types: Vec<String>,
+    attachment_slot_item_sets: Vec<RawSlotSet>,
+    discrete_unsorted_item_sets: Vec<Value>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+struct RawSlotSet {
+    slot_name: String,
+    discrete_item_sets: Vec<Value>,
+}
+
+fn parse_spawn_preset_value(v: &Value) -> Result<GearLoadout, String> {
+    let raw: RawSpawnPreset =
+        serde_json::from_value(v.clone()).map_err(|e| e.to_string())?;
+    let attachment_entries: Vec<SpawnEntry> = raw
+        .attachment_slot_item_sets
+        .into_iter()
+        .map(|slot| {
+            let label = if slot.slot_name.is_empty() {
+                "(unnamed slot)".into()
+            } else {
+                slot.slot_name
+            };
+            let mut items = Vec::new();
+            for set in &slot.discrete_item_sets {
+                collect_classnames(set, &mut items);
+            }
+            dedup_items(&mut items);
+            SpawnEntry {
+                label,
+                chance: 1.0,
+                items,
+            }
+        })
+        .collect();
+    let cargo_entries: Vec<SpawnEntry> = raw
+        .discrete_unsorted_item_sets
+        .iter()
+        .map(|set| {
+            let label = set
+                .get("name")
+                .and_then(|x| x.as_str())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("cargo")
+                .to_string();
+            let mut items = Vec::new();
+            collect_classnames(set, &mut items);
+            dedup_items(&mut items);
+            SpawnEntry {
+                label,
+                chance: 1.0,
+                items,
+            }
+        })
+        .collect();
+
+    let mut seen = std::collections::HashSet::new();
+    let mut classnames = Vec::new();
+    for e in attachment_entries.iter().chain(cargo_entries.iter()) {
+        for n in &e.items {
+            if seen.insert(n.clone()) {
+                classnames.push(n.clone());
+            }
+        }
+    }
+
+    Ok(GearLoadout {
+        character_types: raw.character_types,
+        attachment_entries,
+        cargo_entries,
+        classnames,
+    })
+}
+
+fn dedup_items(items: &mut Vec<String>) {
+    let mut seen = std::collections::HashSet::new();
+    items.retain(|s| seen.insert(s.clone()));
 }
 
 fn convert_loadout(l: RawLoadout) -> GearLoadout {
@@ -167,7 +271,10 @@ fn collect_classnames(v: &Value, out: &mut Vec<String>) {
                             }
                         }
                     }
-                    "type" => {
+                    // `type` = older cfgPlayerSpawnGear.json.
+                    // `itemType` = cfggameplay spawnGearPresetFiles
+                    // (SurvivorPreset.json and friends).
+                    "type" | "itemType" => {
                         if let Value::String(s) = val {
                             out.push(s.clone());
                         }
@@ -251,6 +358,167 @@ fn serialize_cargo_entry(e: &SpawnEntry) -> Value {
 fn round_chance(c: f64) -> f64 {
     let clamped = c.clamp(0.0, 1.0);
     (clamped * 1000.0).round() / 1000.0
+}
+
+fn round_attr(v: f64) -> f64 {
+    (v * 1000.0).round() / 1000.0
+}
+
+fn item_from_value(v: &Value) -> Option<SpawnKitItem> {
+    let item_type = v.get("itemType")?.as_str()?.to_string();
+    if item_type.is_empty() {
+        return None;
+    }
+    let attrs = v.get("attributes");
+    let num = |key: &str, default: f64| {
+        attrs
+            .and_then(|a| a.get(key))
+            .and_then(|x| x.as_f64())
+            .unwrap_or(default)
+    };
+    Some(SpawnKitItem {
+        item_type,
+        spawn_weight: v.get("spawnWeight").and_then(|x| x.as_i64()).unwrap_or(1),
+        health_min: num("healthMin", 1.0),
+        health_max: num("healthMax", 1.0),
+        quantity_min: num("quantityMin", 1.0),
+        quantity_max: num("quantityMax", 1.0),
+        quick_bar_slot: v.get("quickBarSlot").and_then(|x| x.as_i64()).unwrap_or(-1),
+    })
+}
+
+fn item_to_value(item: &SpawnKitItem) -> Value {
+    json!({
+        "itemType": item.item_type,
+        "spawnWeight": item.spawn_weight.max(1),
+        "attributes": {
+            "healthMin": round_attr(item.health_min),
+            "healthMax": round_attr(item.health_max),
+            "quantityMin": round_attr(item.quantity_min),
+            "quantityMax": round_attr(item.quantity_max),
+        },
+        "quickBarSlot": item.quick_bar_slot,
+        "simpleChildrenUseDefaultAttributes": false,
+        "simpleChildrenTypes": [],
+        "complexChildrenTypes": [],
+    })
+}
+
+/// Parse one `spawnPresets/*.json` into the editable kit model.
+pub fn parse_spawn_kit_file(path: &Path, rel_path: String) -> AppResult<SpawnKit> {
+    let bytes = std::fs::read(path)?;
+    let v: Value = serde_json::from_slice(&bytes).map_err(|e| {
+        AppError::Internal(format!("parsing {}: {e}", path.display()))
+    })?;
+    let name = v
+        .get("name")
+        .and_then(|x| x.as_str())
+        .unwrap_or("SurvivorPreset")
+        .to_string();
+    let spawn_weight = v.get("spawnWeight").and_then(|x| x.as_i64()).unwrap_or(1);
+    let character_types = v
+        .get("characterTypes")
+        .and_then(|x| x.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let worn = v
+        .get("attachmentSlotItemSets")
+        .and_then(|x| x.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|slot| {
+                    let slot_name = slot
+                        .get("slotName")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let items = slot
+                        .get("discreteItemSets")
+                        .and_then(|x| x.as_array())
+                        .map(|sets| sets.iter().filter_map(item_from_value).collect())
+                        .unwrap_or_default();
+                    SpawnKitSlot { slot_name, items }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let pockets = v
+        .get("discreteUnsortedItemSets")
+        .and_then(|x| x.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|set| {
+                    let name = set
+                        .get("name")
+                        .and_then(|x| x.as_str())
+                        .unwrap_or("Cargo")
+                        .to_string();
+                    let spawn_weight =
+                        set.get("spawnWeight").and_then(|x| x.as_i64()).unwrap_or(1);
+                    let items = set
+                        .get("complexChildrenTypes")
+                        .and_then(|x| x.as_array())
+                        .map(|kids| kids.iter().filter_map(item_from_value).collect())
+                        .unwrap_or_default();
+                    SpawnKitPocket {
+                        name,
+                        spawn_weight,
+                        items,
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(SpawnKit {
+        rel_path,
+        name,
+        spawn_weight,
+        character_types,
+        worn,
+        pockets,
+    })
+}
+
+pub fn write_spawn_kit_file(path: &Path, kit: &SpawnKit) -> AppResult<()> {
+    let doc = json!({
+        "spawnWeight": kit.spawn_weight.max(1),
+        "name": kit.name,
+        "characterTypes": kit.character_types,
+        "attachmentSlotItemSets": kit.worn.iter().map(|slot| {
+            json!({
+                "slotName": slot.slot_name,
+                "discreteItemSets": slot.items.iter().map(item_to_value).collect::<Vec<_>>(),
+            })
+        }).collect::<Vec<_>>(),
+        "discreteUnsortedItemSets": kit.pockets.iter().map(|pocket| {
+            json!({
+                "name": pocket.name,
+                "spawnWeight": pocket.spawn_weight.max(1),
+                "attributes": {
+                    "healthMin": 1.0,
+                    "healthMax": 1.0,
+                    "quantityMin": 1.0,
+                    "quantityMax": 1.0,
+                },
+                "quickBarSlot": -1,
+                "simpleChildrenUseDefaultAttributes": false,
+                "simpleChildrenTypes": [],
+                "complexChildrenTypes": pocket.items.iter().map(item_to_value).collect::<Vec<_>>(),
+            })
+        }).collect::<Vec<_>>(),
+    });
+    let text = serde_json::to_string_pretty(&doc)
+        .map(|s| format!("{s}\n"))
+        .map_err(|e| AppError::Internal(format!("serializing spawn preset: {e}")))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, text)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -383,6 +651,44 @@ mod tests {
         let g = parse_bytes(b"{}").unwrap();
         assert!(g.loadouts.is_empty());
         assert!(g.version.is_none());
+    }
+
+    #[test]
+    fn parses_cfggameplay_spawn_preset() {
+        let src = r#"{
+          "spawnWeight": 1,
+          "name": "SurvivorPreset",
+          "characterTypes": [],
+          "attachmentSlotItemSets": [
+            {
+              "slotName": "Body",
+              "discreteItemSets": [
+                { "itemType": "Hoodie_Black", "spawnWeight": 1 },
+                { "itemType": "Hoodie_Red", "spawnWeight": 1 }
+              ]
+            }
+          ],
+          "discreteUnsortedItemSets": [
+            {
+              "name": "Cargo1",
+              "complexChildrenTypes": [
+                { "itemType": "Flaregun" },
+                { "itemType": "Ammo_Flare" }
+              ]
+            }
+          ]
+        }"#;
+        let g = parse_bytes(src.as_bytes()).unwrap();
+        assert_eq!(g.loadouts.len(), 1);
+        let l = &g.loadouts[0];
+        assert_eq!(l.attachment_entries[0].label, "Body");
+        assert_eq!(
+            l.attachment_entries[0].items,
+            vec!["Hoodie_Black", "Hoodie_Red"]
+        );
+        assert_eq!(l.cargo_entries[0].label, "Cargo1");
+        assert_eq!(l.cargo_entries[0].items, vec!["Flaregun", "Ammo_Flare"]);
+        assert!(l.classnames.contains(&"Flaregun".to_string()));
     }
 
     #[test]

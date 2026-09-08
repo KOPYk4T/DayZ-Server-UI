@@ -107,6 +107,10 @@ pub struct WeaponObstructionData {
 pub struct PlayerData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_personal_light: Option<bool>,
+    /// Mission-relative JSON files the engine applies as starting
+    /// gear (DayZ 1.24+). Typical: `["spawnPresets/SurvivorPreset.json"]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spawn_gear_preset_files: Option<Vec<String>>,
     #[serde(rename = "StaminaData", skip_serializing_if = "Option::is_none")]
     pub stamina_data: Option<StaminaData>,
     #[serde(rename = "ShockHandlingData", skip_serializing_if = "Option::is_none")]

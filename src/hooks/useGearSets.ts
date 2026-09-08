@@ -68,3 +68,17 @@ export function useGearSetsUpdate() {
     },
   });
 }
+
+export function useGearSetsUpdateKits() {
+  const qc = useQueryClient();
+  const active = useProfileStore((s) => s.active);
+  return useMutation({
+    mutationFn: (kits: import("@/types/ipc").SpawnKit[]) => {
+      if (!active) throw new Error("no active profile");
+      return tauri.gearSetsUpdateKits(active.id, kits);
+    },
+    onSuccess: (snap) => {
+      if (active) qc.setQueryData(KEY.snapshot(active.id), snap);
+    },
+  });
+}

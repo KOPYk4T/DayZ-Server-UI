@@ -24,7 +24,10 @@ pub use globals::{GlobalVar, GlobalVarType, Globals};
 pub use item_type::{ItemFlags, ItemSource, ItemType};
 pub use limits_definition::{LimitFlag, LimitName, LimitsDefinition};
 pub use player_spawn::{PlayerSpawnPoints, PosFormat, SpawnPosition};
-pub use player_spawn_gear::{GearLoadout, PlayerSpawnGear, SpawnEntry};
+pub use player_spawn_gear::{
+    GearLoadout, PlayerSpawnGear, SpawnEntry, SpawnKit, SpawnKitItem, SpawnKitPocket,
+    SpawnKitSlot,
+};
 pub use random_preset::{PresetItem, PresetKind, RandomPreset};
 pub use server_cfg::{CfgSegment, CfgValueKind, ServerCfg};
 pub use spawnable_type::{

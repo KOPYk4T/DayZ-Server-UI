@@ -535,6 +535,13 @@ export function gearSetsUpdate(
   return invoke("gear_sets_update", { id, data });
 }
 
+export function gearSetsUpdateKits(
+  id: string,
+  kits: import("@/types/ipc").SpawnKit[],
+): Promise<GearSetsSnapshot> {
+  return invoke("gear_sets_update_kits", { id, kits });
+}
+
 export function gearSetsScanInitC(id: string): Promise<InitCScan> {
   return invoke("gear_sets_scan_init_c", { id });
 }

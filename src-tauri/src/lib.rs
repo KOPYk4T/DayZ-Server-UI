@@ -140,6 +140,7 @@ pub fn run() {
             commands::territories::territories_remove_animal,
             commands::gear_sets::gear_sets_get,
             commands::gear_sets::gear_sets_update,
+            commands::gear_sets::gear_sets_update_kits,
             commands::gear_sets::gear_sets_scan_init_c,
             commands::gear_sets::gear_sets_generate_from_init_c,
             commands::globals::globals_get,

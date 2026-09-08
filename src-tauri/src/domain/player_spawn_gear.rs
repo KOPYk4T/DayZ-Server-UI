@@ -47,3 +47,43 @@ pub struct PlayerSpawnGear {
     pub version: Option<String>,
     pub loadouts: Vec<GearLoadout>,
 }
+
+/// Editable DayZ 1.24+ spawn preset (`spawnPresets/*.json`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnKit {
+    /// Workspace-relative path, e.g. `mpmissions/…/spawnPresets/SurvivorPreset.json`.
+    pub rel_path: String,
+    pub name: String,
+    pub spawn_weight: i64,
+    pub character_types: Vec<String>,
+    pub worn: Vec<SpawnKitSlot>,
+    pub pockets: Vec<SpawnKitPocket>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnKitSlot {
+    pub slot_name: String,
+    pub items: Vec<SpawnKitItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnKitPocket {
+    pub name: String,
+    pub spawn_weight: i64,
+    pub items: Vec<SpawnKitItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpawnKitItem {
+    pub item_type: String,
+    pub spawn_weight: i64,
+    pub health_min: f64,
+    pub health_max: f64,
+    pub quantity_min: f64,
+    pub quantity_max: f64,
+    pub quick_bar_slot: i64,
+}

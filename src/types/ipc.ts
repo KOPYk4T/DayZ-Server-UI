@@ -1029,11 +1029,49 @@ export interface PlayerSpawnGear {
   loadouts: GearLoadout[];
 }
 
+export type GearSetsSource =
+  | "spawnPresets"
+  | "cfgPlayerSpawnGear"
+  | "missing";
+
+export interface SpawnKitItem {
+  itemType: string;
+  spawnWeight: number;
+  healthMin: number;
+  healthMax: number;
+  quantityMin: number;
+  quantityMax: number;
+  quickBarSlot: number;
+}
+
+export interface SpawnKitSlot {
+  slotName: string;
+  items: SpawnKitItem[];
+}
+
+export interface SpawnKitPocket {
+  name: string;
+  spawnWeight: number;
+  items: SpawnKitItem[];
+}
+
+export interface SpawnKit {
+  relPath: string;
+  name: string;
+  spawnWeight: number;
+  characterTypes: string[];
+  worn: SpawnKitSlot[];
+  pockets: SpawnKitPocket[];
+}
+
 export interface GearSetsSnapshot {
   data: PlayerSpawnGear;
   missingFile: boolean;
+  /** Live file the engine reads. `spawnPresets` = cfggameplay.json list. */
+  source: GearSetsSource;
   fileDisplay: string;
   allClassnames: string[];
+  kits: SpawnKit[];
 }
 
 // ---------- init.c importer (Phase 6c) ----------

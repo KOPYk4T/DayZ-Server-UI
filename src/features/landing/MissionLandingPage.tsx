@@ -100,7 +100,7 @@ export function MissionLandingPage() {
           to: "/app/gear-sets",
           label: "Gear Sets",
           description:
-            "cfgPlayerSpawnGear.json — what a fresh / hop / travel spawn actually carries at first tick.",
+            "Starting gear — cfggameplay spawn presets or cfgPlayerSpawnGear.json. What a fresh spawn actually carries.",
           icon: ShirtIcon,
           stat: `${gearSetCount.toLocaleString()} gear set(s)`,
         },

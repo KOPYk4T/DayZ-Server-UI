@@ -23,12 +23,14 @@ import { toast } from "sonner";
 import {
   useGearSetsSnapshot,
   useGearSetsUpdate,
+  useGearSetsUpdateKits,
 } from "@/hooks/useGearSets";
 import { useItemsSnapshot } from "@/hooks/useItems";
 import { EditableLoadoutCard } from "@/features/gear-sets/EditableLoadoutCard";
+import { GearKitBoard } from "@/features/gear-sets/GearKitBoard";
 import { ImportFromInitCDialog } from "@/features/gear-sets/ImportFromInitCDialog";
 import { VanillaOverriddenBanner } from "@/features/mods/VanillaOverriddenBanner";
-import type { GearLoadout, PlayerSpawnGear } from "@/types/ipc";
+import type { GearLoadout, PlayerSpawnGear, SpawnKit } from "@/types/ipc";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -43,17 +45,26 @@ export function GearSetsPage() {
   const snapshot = useGearSetsSnapshot();
   const itemsSnap = useItemsSnapshot();
   const update = useGearSetsUpdate();
+  const updateKits = useGearSetsUpdateKits();
   const navigate = useNavigate();
 
   const [search, setSearch] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [draft, setDraft] = useState<PlayerSpawnGear | null>(null);
+  const [kitDraft, setKitDraft] = useState<SpawnKit[] | null>(null);
 
   // Load snapshot into local draft whenever it arrives.
   useEffect(() => {
-    if (snapshot.data) setDraft(snapshot.data.data);
+    if (!snapshot.data) return;
+    setDraft(snapshot.data.data);
+    setKitDraft(snapshot.data.kits ?? []);
   }, [snapshot.data]);
+
+  const kitsDirty = useMemo(() => {
+    if (!kitDraft || !snapshot.data) return false;
+    return JSON.stringify(kitDraft) !== JSON.stringify(snapshot.data.kits ?? []);
+  }, [kitDraft, snapshot.data]);
 
   const dirty = useMemo(() => {
     if (!draft || !snapshot.data) return false;
@@ -98,8 +109,24 @@ export function GearSetsPage() {
     });
   };
 
+  const saveKits = () => {
+    if (!kitDraft) return;
+    updateKits.mutate(kitDraft, {
+      onSuccess: () => {
+        toast.success("Starting kit saved", {
+          description: "Wrote spawn preset · Workspace only until you Copy to Local.",
+        });
+      },
+      onError: (err) => toast.error(errorMessage(err)),
+    });
+  };
+
   const revert = () => {
     if (snapshot.data) setDraft(snapshot.data.data);
+  };
+
+  const revertKits = () => {
+    if (snapshot.data) setKitDraft(snapshot.data.kits);
   };
 
   const updateLoadout = (index: number, next: GearLoadout) => {
@@ -140,7 +167,7 @@ export function GearSetsPage() {
   if (snapshot.isLoading) {
     return (
       <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" /> Loading cfgPlayerSpawnGear…
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading starting gear…
       </div>
     );
   }
@@ -175,8 +202,8 @@ export function GearSetsPage() {
     <div className="flex h-full min-h-0 flex-col">
       <PageHeader
         icon={Shirt}
-        title="Gear sets"
-        description="cfgPlayerSpawnGear.json — what a fresh character spawns wearing and carrying. Click a classname chip to open it in Items; warnings highlight classnames not in the registry."
+        title="Starting kit"
+        description="What a brand-new character is wearing and holding the first second they exist. Hop and travel keep their old inventory — this page does not touch them."
         badges={
           <>
             {editMode ? (
@@ -187,6 +214,14 @@ export function GearSetsPage() {
                 editing
               </Badge>
             ) : null}
+            {data.source === "spawnPresets" ? (
+              <Badge
+                variant="outline"
+                className="border-primary/40 text-primary"
+              >
+                spawn presets
+              </Badge>
+            ) : null}
             {data.missingFile ? (
               <Badge
                 variant="outline"
@@ -195,7 +230,7 @@ export function GearSetsPage() {
                 file not found
               </Badge>
             ) : null}
-            {dirty ? (
+            {dirty || kitsDirty ? (
               <Badge
                 variant="outline"
                 className="border-primary/40 text-primary"
@@ -208,7 +243,31 @@ export function GearSetsPage() {
         path={data.missingFile ? undefined : data.fileDisplay}
         actions={
           <>
-            {editMode ? (
+            {data.source === "spawnPresets" ? (
+              <>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={revertKits}
+                  disabled={!kitsDirty || updateKits.isPending}
+                >
+                  <Undo2 className="mr-1.5 h-3.5 w-3.5" />
+                  Revert
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={saveKits}
+                  disabled={!kitsDirty || updateKits.isPending}
+                >
+                  {updateKits.isPending ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Save className="mr-1.5 h-3.5 w-3.5" />
+                  )}
+                  Save
+                </Button>
+              </>
+            ) : editMode ? (
               <>
                 <Button
                   size="sm"
@@ -258,14 +317,16 @@ export function GearSetsPage() {
             >
               <MapPin className="mr-1.5 h-3.5 w-3.5" /> Player Spawns →
             </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => setImportOpen(true)}
-              title="Scan init.c for legacy CreateInInventory calls and optionally seed a starter cfgPlayerSpawnGear.json"
-            >
-              <FileCode2 className="mr-1.5 h-3.5 w-3.5" /> Import from init.c…
-            </Button>
+            {data.source !== "spawnPresets" ? (
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setImportOpen(true)}
+                title="Scan init.c for legacy CreateInInventory calls and optionally seed a starter cfgPlayerSpawnGear.json"
+              >
+                <FileCode2 className="mr-1.5 h-3.5 w-3.5" /> Import from init.c…
+              </Button>
+            ) : null}
             <Button
               size="sm"
               variant="ghost"
@@ -286,12 +347,12 @@ export function GearSetsPage() {
 
       <GearSetsExplainer />
 
-      <div className="px-6 pt-3">
+      <div className="space-y-3 px-6 pt-4">
+        <WhatThisPageDoes />
         <VanillaOverriddenBanner system="spawn-gear">
-          Expansion ships its own SpawnGear system. Vanilla{" "}
-          <code>cfgPlayerSpawnGear.json</code> below still works but is
-          ignored when Expansion's SpawnGear is enabled in{" "}
-          <code>SpawnSettings.json</code>.
+          Expansion ships its own SpawnGear system. Vanilla starting
+          gear below is ignored when Expansion's SpawnGear is enabled
+          in <code>SpawnSettings.json</code>.
         </VanillaOverriddenBanner>
       </div>
 
@@ -301,12 +362,13 @@ export function GearSetsPage() {
             <AlertTriangle className="h-4 w-4" />
             <AlertDescription className="ml-2 space-y-2 text-xs">
               <p>
-                No <code>cfgPlayerSpawnGear.json</code> in the mission
-                root. Legacy missions define starting gear in{" "}
-                <code>init.c</code> via{" "}
-                <code>PlayerBase::StartingEquipSetup</code> instead —
-                click <strong>Import from init.c</strong> above to scan
-                it and seed a starter JSON.
+                No starting-gear file in this mission. Modern DayZ
+                lists presets in{" "}
+                <code>cfggameplay.json</code>{" "}
+                (<code>PlayerData.spawnGearPresetFiles</code>). Legacy
+                missions use <code>cfgPlayerSpawnGear.json</code> or{" "}
+                <code>init.c</code>{" "}
+                <code>StartingEquipSetup</code>.
               </p>
               <Button
                 size="sm"
@@ -320,6 +382,7 @@ export function GearSetsPage() {
         </div>
       ) : (
         <>
+          {data.source !== "spawnPresets" ? (
           <div className="flex items-center gap-3 border-b border-border/60 px-6 py-3 text-xs">
             <Input
               placeholder="Search character type / classname / slot"
@@ -335,9 +398,19 @@ export function GearSetsPage() {
               {data.data.version ? ` · version ${data.data.version}` : null}
             </span>
           </div>
+          ) : null}
 
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-6">
-            {filtered.length === 0 ? (
+            {data.source === "spawnPresets" && kitDraft ? (
+              <GearKitBoard
+                kits={kitDraft}
+                items={itemsSnap.data?.items ?? []}
+                onChange={setKitDraft}
+                onOpenItem={(name) =>
+                  navigate(`/app/items?name=${encodeURIComponent(name)}`)
+                }
+              />
+            ) : filtered.length === 0 ? (
               <div className="rounded-md border border-dashed border-border/60 p-6 text-center text-xs text-muted-foreground">
                 No loadouts match the search.
               </div>
@@ -373,7 +446,7 @@ export function GearSetsPage() {
                 );
               })
             )}
-            {editMode ? (
+            {editMode && data.source !== "spawnPresets" ? (
               <div className="flex justify-center pt-2">
                 <Button variant="secondary" onClick={addLoadout}>
                   <Plus className="mr-1.5 h-3.5 w-3.5" /> Add loadout
@@ -523,6 +596,19 @@ function GearSetsExplainer() {
       storageKey="dzcm.gear-sets.explainer.open"
     >
       <p>
+        <strong className="text-foreground">Where it lives.</strong>{" "}
+        Current DayZ reads{" "}
+        <code>cfggameplay.json</code>{" "}
+        <code>PlayerData.spawnGearPresetFiles</code> (typically{" "}
+        <code>spawnPresets/SurvivorPreset.json</code>). Older
+        missions use a single{" "}
+        <code>cfgPlayerSpawnGear.json</code>.{" "}
+        <code>init.c</code>{" "}
+        <code>StartingEquipSetup</code> is leftover on many
+        missions and is not the live kit if a preset file is
+        listed.
+      </p>
+      <p>
         <strong className="text-foreground">Matching.</strong> When
         a player joins with a fresh character, DayZ looks at the
         chosen <code>characterType</code> (e.g.{" "}
@@ -556,11 +642,46 @@ function GearSetsExplainer() {
         to jump to it in the Items editor (useful if you want to
         check nominal / spawn behaviour of a starting item).
       </p>
-      <p className="italic">
-        This is a view-only page in Phase 6a. Editing + an init.c
-        legacy importer (for missions that still use{" "}
-        <code>PlayerBase::OnInit()</code>) land in Phase 6b / 6c.
-      </p>
     </Explainer>
+  );
+}
+
+function WhatThisPageDoes() {
+  const steps = [
+    {
+      n: "01",
+      title: "Fresh only",
+      body: "A new character gets this kit on first tick. Hop and travel reuse the old body — they never come here.",
+    },
+    {
+      n: "02",
+      title: "Worn = a roll",
+      body: "Each clothing slot picks one option. Same weight = equal chance. Delete the last hoodie and that slot stays empty.",
+    },
+    {
+      n: "03",
+      title: "Pockets = given",
+      body: "Flaregun, bandage, apple — every pocket item is created. Save writes Workspace; Copy to Local when you want to test.",
+    },
+  ];
+  return (
+    <div className="grid gap-3 md:grid-cols-3">
+      {steps.map((s) => (
+        <div
+          key={s.n}
+          className="rounded-md border border-border/60 bg-muted/15 px-4 py-3"
+        >
+          <p className="font-mono text-[10px] tracking-[0.2em] text-muted-foreground">
+            {s.n}
+          </p>
+          <p className="mt-1 text-sm font-semibold text-foreground">
+            {s.title}
+          </p>
+          <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
+            {s.body}
+          </p>
+        </div>
+      ))}
+    </div>
   );
 }

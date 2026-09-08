@@ -121,7 +121,7 @@ const LANES: Lane[] = [
     colour: "cream",
     sources: [
       { label: "cfgplayerspawnpoints.xml", to: "/app/player-spawns", tag: "bubbles" },
-      { label: "cfgPlayerSpawnGear.json", to: "/app/gear-sets", tag: "gear" },
+      { label: "Starting gear (spawn presets)", to: "/app/gear-sets", tag: "gear" },
     ],
     engineLabel: "Spawn controller",
     engineHint: "picks fresh/hop/travel bubble → attaches gear → applies protection",
@@ -738,7 +738,7 @@ function Legend() {
           <LegendRow
             swatch="cream"
             label="Player spawn"
-            body="cfgplayerspawnpoints.xml holds the fresh/hop/travel bubble lists. cfgPlayerSpawnGear.json assigns starting gear. cfggameplay.json + globals.xml tune the rules (login protection, respawn dialog)."
+            body="cfgplayerspawnpoints.xml holds the fresh/hop/travel bubble lists. Starting gear comes from cfggameplay.json spawnGearPresetFiles (or legacy cfgPlayerSpawnGear.json). globals.xml tunes login protection."
           />
           <LegendRow
             swatch="olive-mid"
