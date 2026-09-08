@@ -117,7 +117,7 @@ export function ModSettingsEditor({ file, onDeleted }: Props) {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex shrink-0 flex-wrap items-start justify-between gap-3 border-b border-border/60 px-5 py-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -173,7 +173,7 @@ export function ModSettingsEditor({ file, onDeleted }: Props) {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-5 py-4">
         {file.dedicatedRoute ? (
           <Alert className="mb-4">
             <AlertDescription className="flex flex-wrap items-center gap-2 text-xs">
