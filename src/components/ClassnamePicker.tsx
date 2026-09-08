@@ -8,6 +8,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { WikiItemImage } from "@/features/wiki-images/WikiItemImage";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -162,6 +163,12 @@ export function ClassnamePicker({
                         ) : (
                           <span className="h-3 w-3" />
                         )}
+                        <WikiItemImage
+                          classname={name}
+                          size="sm"
+                          preview={false}
+                          cachedOnly
+                        />
                         <span className="truncate">{name}</span>
                         {mutedState?.muted && mutedState.modLabel ? (
                           <span className="ml-auto shrink-0 text-[9px] uppercase text-muted-foreground">

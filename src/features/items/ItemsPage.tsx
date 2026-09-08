@@ -44,8 +44,14 @@ import { AddItemWizard } from "@/features/items/AddItemWizard";
 import { BulkEditDialog } from "@/features/items/BulkEditDialog";
 import { CeImportDialog } from "@/features/items/CeImportDialog";
 import { CeImportsManagerDialog } from "@/features/items/CeImportsManagerDialog";
-import { applyFilters, DEFAULT_FILTERS } from "@/features/items/filters";
+import {
+  applyFilters,
+  DEFAULT_FILTERS,
+  readListParam,
+  readMatchParam,
+} from "@/features/items/filters";
 import { ItemDetailDrawer } from "@/features/items/ItemDetailDrawer";
+import { ItemsExplainer } from "@/features/items/ItemsExplainer";
 import { ItemsFiltersPanel } from "@/features/items/ItemsFiltersPanel";
 import { ItemsTable } from "@/features/items/ItemsTable";
 import { OriginFilter, useOriginFilter } from "@/features/ce/OriginFilter";
@@ -92,31 +98,47 @@ export function ItemsPage() {
   const filtered = origin.filtered;
 
   // Deep-link handling. Supported query parameters:
-  //   ?name=CLASS        — opens that item's detail drawer
-  //   ?category=NAME     — pre-filters the list by category
-  //   ?usage=NAME        — pre-filters by usage flag
-  //   ?value=NAME        — pre-filters by value / tier flag
-  //   ?tag=NAME          — pre-filters by tag
-  // Used by Zones & Tiers (impact badges), Linked In panels, and any
-  // other cross-page drill-down. Filter params drop any prior filter
-  // on the same dimension but leave other filters and the search box
-  // alone so the user can layer further.
+  //   ?name=CLASS              — opens that item's detail drawer
+  //   ?category=NAME[,NAME]    — pre-filters by category (OR)
+  //   ?usage=NAME[,NAME]       — pre-filters by usage flags
+  //   ?value=NAME[,NAME]       — pre-filters by value / tier flags
+  //   ?tag=NAME[,NAME]         — pre-filters by tag
+  //   ?usageMatch=any|all      — how several usages combine (default any)
+  //   ?valueMatch=any|all
+  //   ?tagMatch=any|all
+  // Repeated keys also work (?usage=Town&usage=Village). Used by
+  // Zones & Tiers, Linked In, dashboard chips. A param replaces that
+  // dimension only — other filters and the search box stay.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const qName = params.get("name");
     if (qName) setSelectedName(qName);
 
-    const qCategory = params.get("category");
-    const qUsage = params.get("usage");
-    const qValue = params.get("value");
-    const qTag = params.get("tag");
-    if (qCategory || qUsage || qValue || qTag) {
+    const qCategory = readListParam(params, "category");
+    const qUsage = readListParam(params, "usage");
+    const qValue = readListParam(params, "value");
+    const qTag = readListParam(params, "tag");
+    const qUsageMatch = readMatchParam(params, "usageMatch");
+    const qValueMatch = readMatchParam(params, "valueMatch");
+    const qTagMatch = readMatchParam(params, "tagMatch");
+    if (
+      qCategory ||
+      qUsage ||
+      qValue ||
+      qTag ||
+      qUsageMatch ||
+      qValueMatch ||
+      qTagMatch
+    ) {
       setFilters((prev) => ({
         ...prev,
-        category: qCategory ?? prev.category,
-        usage: qUsage ?? prev.usage,
-        value: qValue ?? prev.value,
-        tag: qTag ?? prev.tag,
+        ...(qCategory ? { categories: qCategory } : {}),
+        ...(qUsage ? { usages: qUsage } : {}),
+        ...(qValue ? { values: qValue } : {}),
+        ...(qTag ? { tags: qTag } : {}),
+        ...(qUsageMatch ? { usageMatch: qUsageMatch } : {}),
+        ...(qValueMatch ? { valueMatch: qValueMatch } : {}),
+        ...(qTagMatch ? { tagMatch: qTagMatch } : {}),
       }));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -332,6 +354,8 @@ export function ItemsPage() {
           </>
         }
       />
+
+      <ItemsExplainer />
 
       <div className="flex min-h-0 flex-1">
         <ItemsFiltersPanel

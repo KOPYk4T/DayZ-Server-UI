@@ -8,7 +8,7 @@ import {
   type SortingState,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Image } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -16,6 +16,8 @@ import { InfoTooltip } from "@/components/InfoTooltip";
 import { OriginChip } from "@/features/ce/OriginChip";
 import { cn } from "@/lib/utils";
 import type { ItemType } from "@/types/ipc";
+
+import { WikiItemImage } from "@/features/wiki-images/WikiItemImage";
 
 import { FIELDS } from "./glossary";
 import { ItemLinkBadges } from "./ItemLinkedInPanel";
@@ -95,6 +97,20 @@ export function ItemsTable({
             } satisfies ColSpec,
           ]
         : []),
+      {
+        id: "__art__",
+        width: 40,
+        enableSorting: false,
+        header: (
+          <Image
+            className="h-3.5 w-3.5 text-muted-foreground"
+            aria-label="Inventory art"
+          />
+        ),
+        render: (it: ItemType) => (
+          <WikiItemImage classname={it.name} size="sm" />
+        ),
+      },
       {
         id: "name",
         accessor: "name",
@@ -308,9 +324,10 @@ export function ItemsTable({
         style={{ width: totalWidth, minWidth: "100%" }}
         role="row"
       >
-        {table.getHeaderGroups()[0]?.headers.map((header) => {
+                {table.getHeaderGroups()[0]?.headers.map((header) => {
           const sortable = header.column.getCanSort();
           const sorted = header.column.getIsSorted();
+          const tight = header.id === "__art__";
           return (
             <div
               key={header.id}
@@ -320,7 +337,8 @@ export function ItemsTable({
               }
               style={{ width: header.column.getSize() }}
               className={cn(
-                "flex h-8 items-center gap-1.5 px-3 text-left text-[11px] font-medium text-muted-foreground",
+                "flex h-8 items-center gap-1.5 text-left text-[11px] font-medium text-muted-foreground",
+                tight ? "justify-center px-1" : "px-3",
                 sortable && "cursor-pointer select-none hover:text-foreground",
               )}
             >
@@ -376,7 +394,12 @@ export function ItemsTable({
                     key={cell.id}
                     role="cell"
                     style={{ width: cell.column.getSize() }}
-                    className="flex min-w-0 items-center px-3"
+                    className={cn(
+                      "flex min-w-0 items-center",
+                      cell.column.id === "__art__"
+                        ? "justify-center px-1"
+                        : "px-3",
+                    )}
                   >
                     {flexRender(cell.column.columnDef.cell, cell.getContext())}
                   </div>

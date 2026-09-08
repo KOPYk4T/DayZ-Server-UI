@@ -6,20 +6,19 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Tabs,
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { InfoTooltip } from "@/components/InfoTooltip";
+import { cn } from "@/lib/utils";
 
-import { DEFAULT_FILTERS, type ItemFilters } from "./filters";
+import {
+  DEFAULT_FILTERS,
+  toggleFlag,
+  type FlagMatch,
+  type ItemFilters,
+} from "./filters";
 import { FIELDS, FILTER_TOOLTIPS, valueHint } from "./glossary";
 
 interface Props {
@@ -32,8 +31,6 @@ interface Props {
   totalCount: number;
   filteredCount: number;
 }
-
-const ANY = "__any__";
 
 export function ItemsFiltersPanel({
   value,
@@ -60,11 +57,14 @@ export function ItemsFiltersPanel({
   const clear = () => onChange(DEFAULT_FILTERS);
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col gap-4 border-r border-border/60 bg-card/50 p-4">
+    <aside className="flex w-64 shrink-0 flex-col gap-4 overflow-y-auto border-r border-border/60 bg-card/50 p-4">
       <div className="flex items-center justify-between">
-        <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
-          Filters
-        </Label>
+        <div className="flex items-center gap-1.5">
+          <Label className="text-[10px] uppercase tracking-wide text-muted-foreground">
+            Filters
+          </Label>
+          <InfoTooltip>{FILTER_TOOLTIPS.combine}</InfoTooltip>
+        </div>
         <Button
           variant="ghost"
           size="sm"
@@ -116,37 +116,51 @@ export function ItemsFiltersPanel({
         </div>
       </div>
 
-      <FilterSelect
+      <FlagGroup
         label="Category"
         tagline={FIELDS.category.tagline}
         description={valueHint(FIELDS.category, categories)}
-        value={value.category}
-        onChange={(v) => set("category", v)}
         options={categories}
+        selected={value.categories}
+        onToggle={(name) => set("categories", toggleFlag(value.categories, name))}
       />
-      <FilterSelect
+      <FlagGroup
         label="Usage"
         tagline={FIELDS.usage.tagline}
         description={valueHint(FIELDS.usage, usages)}
-        value={value.usage}
-        onChange={(v) => set("usage", v)}
         options={usages}
+        selected={value.usages}
+        onToggle={(name) => set("usages", toggleFlag(value.usages, name))}
+        match={value.usageMatch}
+        onMatchChange={(m) => set("usageMatch", m)}
       />
-      <FilterSelect
+      <FlagGroup
         label="Value (tier)"
         tagline={FIELDS.value.tagline}
         description={valueHint(FIELDS.value, values)}
-        value={value.value}
-        onChange={(v) => set("value", v)}
         options={values}
+        selected={value.values}
+        onToggle={(name) => set("values", toggleFlag(value.values, name))}
+        match={value.valueMatch}
+        onMatchChange={(m) => set("valueMatch", m)}
       />
-      <FilterSelect
+      {value.usages.length > 0 && value.values.length > 0 ? (
+        <p className="rounded-md border border-border/50 bg-background/50 px-2 py-1.5 text-[10px] leading-snug text-muted-foreground">
+          Usage + tier are both set — items must carry{" "}
+          <span className="font-medium text-foreground">both</span>,
+          like CE at a loot point.
+        </p>
+      ) : null}
+
+      <FlagGroup
         label="Tag"
         tagline={FIELDS.tag.tagline}
         description={valueHint(FIELDS.tag, tags)}
-        value={value.tag}
-        onChange={(v) => set("tag", v)}
         options={tags}
+        selected={value.tags}
+        onToggle={(name) => set("tags", toggleFlag(value.tags, name))}
+        match={value.tagMatch}
+        onMatchChange={(m) => set("tagMatch", m)}
       />
 
       <div className="space-y-1.5">
@@ -189,45 +203,83 @@ export function ItemsFiltersPanel({
   );
 }
 
-function FilterSelect({
+function FlagGroup({
   label,
   tagline,
   description,
-  value,
-  onChange,
   options,
+  selected,
+  onToggle,
+  match,
+  onMatchChange,
 }: {
   label: string;
   tagline?: string;
   description?: string;
-  value: string | null;
-  onChange: (next: string | null) => void;
   options: string[];
+  selected: string[];
+  onToggle: (name: string) => void;
+  match?: FlagMatch;
+  onMatchChange?: (next: FlagMatch) => void;
 }) {
   return (
     <div className="space-y-1.5">
-      <div className="flex items-center gap-1.5">
-        <Label className="text-xs">{label}</Label>
-        {description ? (
-          <InfoTooltip tagline={tagline}>{description}</InfoTooltip>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <Label className="text-xs">{label}</Label>
+          {description ? (
+            <InfoTooltip tagline={tagline}>{description}</InfoTooltip>
+          ) : null}
+        </div>
+        {match && onMatchChange && selected.length >= 2 ? (
+          <Tabs
+            value={match}
+            onValueChange={(v) => onMatchChange(v as FlagMatch)}
+          >
+            <TabsList className="h-6">
+              <TabsTrigger
+                value="any"
+                className="px-1.5 text-[10px]"
+                title={FILTER_TOOLTIPS.flagAny}
+              >
+                any
+              </TabsTrigger>
+              <TabsTrigger
+                value="all"
+                className="px-1.5 text-[10px]"
+                title={FILTER_TOOLTIPS.flagAll}
+              >
+                all
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
         ) : null}
       </div>
-      <Select
-        value={value ?? ANY}
-        onValueChange={(v) => onChange(v === ANY ? null : v)}
-      >
-        <SelectTrigger className="h-8 text-xs">
-          <SelectValue placeholder={`any ${label.toLowerCase()}`} />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ANY}>any</SelectItem>
-          {options.map((o) => (
-            <SelectItem key={o} value={o}>
-              {o}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      {options.length === 0 ? (
+        <p className="text-[11px] italic text-muted-foreground">none in use</p>
+      ) : (
+        <div className="flex max-h-36 flex-wrap gap-1 overflow-y-auto">
+          {options.map((o) => {
+            const on = selected.includes(o);
+            return (
+              <button
+                key={o}
+                type="button"
+                onClick={() => onToggle(o)}
+                aria-pressed={on}
+                className={cn(
+                  "rounded-md border px-1.5 py-0.5 font-mono text-[10px] leading-5 transition-colors",
+                  on
+                    ? "border-primary/50 bg-primary/15 text-foreground"
+                    : "border-border/60 text-muted-foreground hover:border-border hover:text-foreground",
+                )}
+              >
+                {o}
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

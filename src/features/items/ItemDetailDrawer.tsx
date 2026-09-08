@@ -44,6 +44,7 @@ import { ItemForm } from "@/features/items/ItemForm";
 import { ItemLinkedInPanel } from "@/features/items/ItemLinkedInPanel";
 import { getItemLinks } from "@/features/items/linkedIn";
 import { useItemLinkIndexes } from "@/features/items/useItemLinks";
+import { WikiItemImage } from "@/features/wiki-images/WikiItemImage";
 import type { ItemType, ItemsSnapshot } from "@/types/ipc";
 
 interface Props {
@@ -177,7 +178,10 @@ export function ItemDetailDrawer({
         className="flex w-full flex-col gap-0 p-0 sm:w-[44rem] md:w-[52rem] lg:w-[58rem] xl:w-[64rem] !max-w-[92vw]"
       >
         <SheetHeader className="border-b border-border/60 px-6 py-4">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
+            {item ? (
+              <WikiItemImage classname={item.name} size="md" />
+            ) : null}
             <SheetTitle className="font-mono">{item?.name ?? ""}</SheetTitle>
             {item ? (
               <Badge variant="outline" className="uppercase">

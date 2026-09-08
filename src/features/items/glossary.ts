@@ -78,7 +78,7 @@ export const FIELDS: Record<string, FieldDef> = {
   usage: {
     tagline: "Location zones where the item can spawn",
     description:
-      "Each usage must be declared in cfglimitsdefinition.xml and mapped to buildings in mapgroupproto.xml. Vanilla caps at 4 per item. An item with no usage tags will never spawn from buildings (only from events with deloot=1).",
+      "Each usage must be declared in cfglimitsdefinition.xml and mapped to buildings in mapgroupproto.xml. Vanilla caps at 4 per item. Several usages on one item are OR — Town + Village can spawn in either. Combined with value they AND: Military + Tier3 only hits military points that are also Tier3. An item with no usage tags will never spawn from buildings (only from events with deloot=1).",
     vanillaValues: [
       "Military",
       "Police",
@@ -103,7 +103,7 @@ export const FIELDS: Record<string, FieldDef> = {
   value: {
     tagline: "Loot tier — controls how far inland the item spawns",
     description:
-      "Tier1 is coastal / starter loot, Tier4 is deep-inland / military-high-tier. An item with no tier is effectively invisible to tier-gated spawn logic.",
+      "Tier1 is coastal / starter loot, Tier4 is deep-inland / military-high-tier. Several values on one item are OR — Tier3 + Tier4 can spawn in either band. A loot point must still match usage AND value. An item with no tier is effectively invisible to tier-gated spawn logic.",
     vanillaValues: ["Tier1", "Tier2", "Tier3", "Tier4", "Unique"],
   },
   tag: {
@@ -190,10 +190,16 @@ export const FILTER_TOOLTIPS = {
     "Matches classnames and categories. Tip: paste a partial classname like 'AK' to narrow the list.",
   source:
     "Pick which origins to show. Use Custom-only to review everything you've modified.",
+  combine:
+    "Category, usage, value and tag stack — an item must pass every dimension you set, the same way CE needs a matching usage AND tier at a loot point. Inside usage / value / tag, several flags default to ANY (the item lists at least one, like CE). Switch to ALL to require every selected flag on the item.",
   stackable:
     "Filter by whether quantmin/quantmax define a percent range. 'Only' shows stackable items (ammo, food, drinks); 'None' shows non-stackables (guns, clothes).",
   includeZeroNominal:
     "When off, hides items CE won't spawn (nominal = 0). Useful for focusing on the live economy.",
+  flagAny:
+    "Item lists at least one of the selected flags. Mirrors CE: an item tagged Town + Village can spawn in either.",
+  flagAll:
+    "Item lists every selected flag. Use this to find types that carry both, e.g. Military and Police.",
 } as const;
 
 /**
